@@ -1,0 +1,68 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv/
+
+# ── Secretos ──────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Neon / PostgreSQL ─────────────────────────────────────
+*.pem
+*.crt
+*.key
+pg_dump_*/
+backups/
+*.sql.gz
+*.dump
+
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Entornos virtuales ────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Modelos de IA ─────────────────────────────────────────
+*.pt
+*.pth
+*.bin
+*.onnx
+*.safetensors
+models_cache/
+.cache/
+huggingface/
+
+# ── spaCy ─────────────────────────────────────────────────
+es_core_news_md/
+en_core_web_*/
+
+# ── Streamlit ─────────────────────────────────────────────
+.streamlit/secrets.toml
+
+# ── Datos de prueba ───────────────────────────────────────
+data/recursos_prueba/*.pdf
+data/recursos_prueba/*.jpg
+data/recursos_prueba/*.png
+
+# ── Logs y experimentos ───────────────────────────────────
+*.log
+resultados_chunking/
+ragas_output/
+
+# ── OS ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
