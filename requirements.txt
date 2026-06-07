@@ -4,13 +4,13 @@ psycopg2-binary==2.9.10
 pgvector==0.3.6
 
 # ── Modelos de IA (corren localmente) ─────────────────────
-torch==2.5.1
+torch==2.6.0
 sentence-transformers==3.3.1
 transformers==4.47.1
 Pillow==11.0.0
 
 # ── Chunking ───────────────────────────────────────────────
-spacy==3.8.3
+spacy>=3.8.0
 # IMPORTANTE: después de instalar esto ejecutar en consola:
 # python -m spacy download es_core_news_md
 
@@ -25,4 +25,4 @@ streamlit==1.41.1
 
 # ── Utilidades ─────────────────────────────────────────────
 python-dotenv==1.0.1
-numpy==1.26.4
+numpy>=2.0.0
