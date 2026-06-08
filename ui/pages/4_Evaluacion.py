@@ -96,23 +96,6 @@ else:
 st.markdown("---")
 st.subheader("Comparativa por estrategia de chunking")
 
-with get_session() as session:
-    stats_estrategia = session.execute(
-        select(
-            EmbeddingTexto_pseudo := select(  # noqa: F841
-                EmbeddingTexto.estrategia_chunking,
-                sa_func.avg(Evaluacion.faithfulness),
-                sa_func.stddev(Evaluacion.faithfulness),
-                sa_func.avg(Evaluacion.answer_relevancy),
-                sa_func.stddev(Evaluacion.answer_relevancy),
-                sa_func.avg(Evaluacion.context_recall),
-                sa_func.stddev(Evaluacion.context_recall),
-            )
-        )
-    ).all()
-
-
-# TODO: Obtener datos reales agrupados por estrategia desde la BD
 st.info(
     "La comparativa por estrategia estará disponible cuando haya "
     "evaluaciones de consultas con diferentes estrategias de chunking."
