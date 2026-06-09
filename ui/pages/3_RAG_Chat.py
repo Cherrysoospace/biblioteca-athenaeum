@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -16,6 +17,40 @@ from pipeline.rag import run_rag
 from pipeline.evaluacion import calcular_metricas_ragas
 from ui.utils.session import get_usuario_id, add_message, clear_messages, set_rag_context
 
+_RE_ANIO = r'\b(1[89]\d{2}|20[0-2]\d)\b'
+
+
+def _auto_detectar_fecha_rag(prompt: str, filtros: dict) -> None:
+    """Detecta año direccional (antes/después/desde/hasta) desde el texto."""
+    year_match = re.search(_RE_ANIO, prompt)
+    if not year_match:
+        return
+    anio = year_match.group(1)
+    pre = prompt[: year_match.start()].lower()
+
+    if re.search(r'(antes|pret[eé]rito|previo|anterior)\s*(de|a|al)?\s*$', pre):
+        filtros["fecha_hasta"] = f"{anio}-12-31"
+    elif re.search(r'(despu[eé]s|posterior|subsiguiente|luego)\s*(de|a|al)?\s*$', pre):
+        filtros["fecha_desde"] = f"{anio}-01-01"
+    elif re.search(r'(desde|a\s*partir\s*de)\s*$', pre):
+        filtros["fecha_desde"] = f"{anio}-01-01"
+    elif re.search(r'(hasta|como\s*m[aá]ximo)\s*$', pre):
+        filtros["fecha_hasta"] = f"{anio}-12-31"
+    else:
+        filtros["fecha_desde"] = f"{anio}-01-01"
+        filtros["fecha_hasta"] = f"{anio}-12-31"
+
+
+def _auto_detectar_tipo_rag(prompt: str, filtros: dict) -> None:
+    """Detecta tipo de recurso desde palabras clave en el texto."""
+    if re.search(r'\blibros?\b', prompt, re.IGNORECASE):
+        filtros["tipo"] = "libro"
+    elif re.search(r'\brevistas?\b', prompt, re.IGNORECASE):
+        filtros["tipo"] = "revista"
+    elif re.search(r'\bartículos?\b', prompt, re.IGNORECASE):
+        filtros["tipo"] = "articulo"
+
+
 st.set_page_config(page_title="Chat RAG", layout="wide")
 st.title("💬 Chat RAG")
 
@@ -26,6 +61,24 @@ estrategia = st.sidebar.selectbox(
     index=0,
     key="rag_estrategia",
 )
+
+# ── Filtros relacionales en sidebar ──────────────────────────────────────
+with st.sidebar.expander("Filtros avanzados (opcional)", expanded=False):
+    rag_filtro_tipo = st.selectbox(
+        "Tipo de recurso",
+        ["", "libro", "articulo", "revista", "mapa", "fotografia", "tesis"],
+        key="rag_filtro_tipo",
+    )
+    rag_filtro_fecha_modo = st.selectbox(
+        "Modo de fecha",
+        ["Exacto", "Antes de", "Después de"],
+        key="rag_filtro_fecha_modo",
+    )
+    rag_filtro_anio = st.number_input(
+        "Año",
+        min_value=0, max_value=2030, value=0, step=1,
+        key="rag_filtro_anio",
+    )
 
 # ── Limpiar conversación ─────────────────────────────────────────────────
 if st.sidebar.button("🗑 Limpiar conversación"):
@@ -61,12 +114,36 @@ if prompt := st.chat_input("Escribe tu pregunta sobre la biblioteca..."):
         with st.spinner("Consultando la biblioteca..."):
             try:
                 estrategia_val = estrategia if estrategia else None
+
+                # Construir filtros desde el sidebar
+                filtros_rag: dict = {}
+                if rag_filtro_tipo:
+                    filtros_rag["tipo"] = rag_filtro_tipo
+                if rag_filtro_anio > 0:
+                    anio_str = f"{rag_filtro_anio}"
+                    if rag_filtro_fecha_modo == "Antes de":
+                        filtros_rag["fecha_hasta"] = f"{anio_str}-12-31"
+                    elif rag_filtro_fecha_modo == "Después de":
+                        filtros_rag["fecha_desde"] = f"{anio_str}-01-01"
+                    else:
+                        filtros_rag["fecha_desde"] = f"{anio_str}-01-01"
+                        filtros_rag["fecha_hasta"] = f"{anio_str}-12-31"
+
+                # Auto-detectar año direccional desde el texto de la consulta
+                if rag_filtro_anio == 0:
+                    _auto_detectar_fecha_rag(prompt, filtros_rag)
+
+                # Auto-detectar tipo en la consulta si no se especificó manualmente
+                if not rag_filtro_tipo:
+                    _auto_detectar_tipo_rag(prompt, filtros_rag)
+
                 with get_session() as session:
                     resultado = run_rag(
                         session=session,
                         usuario_id=get_usuario_id(),
                         pregunta=prompt,
                         top_k=TOP_K,
+                        filtros=filtros_rag or None,
                         estrategia=estrategia_val,
                         evaluar=False,
                     )

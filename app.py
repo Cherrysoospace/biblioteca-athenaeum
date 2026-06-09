@@ -4,6 +4,7 @@ Sistema híbrido relacional-vectorial (RAG)
 """
 
 import argparse
+import re
 import sys
 from core.database import init_db, get_session
 from pipeline.ingest import ingest_recurso
@@ -26,19 +27,59 @@ def cmd_ingest(args):
     print(f"  Embeddings imagen: {result['embeddings_imagen']}")
 
 
+def _auto_detectar_fecha_cli(pregunta: str, filtros: dict) -> None:
+    """Detecta año direccional desde la pregunta si no hay fecha explícita."""
+    if filtros.get("fecha_desde") or filtros.get("fecha_hasta"):
+        return
+    year_match = re.search(r'\b(1[89]\d{2}|20[0-2]\d)\b', pregunta)
+    if not year_match:
+        return
+    anio = year_match.group(1)
+    pre = pregunta[: year_match.start()].lower()
+    if re.search(r'(antes|pret[eé]rito|previo|anterior)\s*(de|a|al)?\s*$', pre):
+        filtros["fecha_hasta"] = f"{anio}-12-31"
+    elif re.search(r'(despu[eé]s|posterior|subsiguiente|luego)\s*(de|a|al)?\s*$', pre):
+        filtros["fecha_desde"] = f"{anio}-01-01"
+    elif re.search(r'(desde|a\s*partir\s*de)\s*$', pre):
+        filtros["fecha_desde"] = f"{anio}-01-01"
+    elif re.search(r'(hasta|como\s*m[aá]ximo)\s*$', pre):
+        filtros["fecha_hasta"] = f"{anio}-12-31"
+    else:
+        filtros["fecha_desde"] = f"{anio}-01-01"
+        filtros["fecha_hasta"] = f"{anio}-12-31"
+
+
+def _auto_detectar_tipo_cli(pregunta: str, filtros: dict) -> None:
+    """Detecta tipo desde palabras clave en la pregunta si no se especificó."""
+    if filtros.get("tipo"):
+        return
+    if re.search(r'\blibros?\b', pregunta, re.IGNORECASE):
+        filtros["tipo"] = "libro"
+    elif re.search(r'\brevistas?\b', pregunta, re.IGNORECASE):
+        filtros["tipo"] = "revista"
+    elif re.search(r'\bartículos?\b', pregunta, re.IGNORECASE):
+        filtros["tipo"] = "articulo"
+
+
 def cmd_query(args):
     """Ejecuta una consulta RAG y muestra la respuesta."""
+    filtros = {
+        "idioma": args.idioma,
+        "tipo": args.tipo,
+        "calificacion_min": args.calificacion_min,
+        "fecha_desde": args.fecha_desde,
+        "fecha_hasta": args.fecha_hasta,
+    }
+    # Auto-detectar desde la pregunta para cualquier filtro no explícito
+    _auto_detectar_fecha_cli(args.pregunta, filtros)
+    _auto_detectar_tipo_cli(args.pregunta, filtros)
     with get_session() as session:
         resultado = run_rag(
             session=session,
             usuario_id=args.usuario_id,
             pregunta=args.pregunta,
             top_k=args.top_k,
-            filtros={
-                "idioma": args.idioma,
-                "tipo": args.tipo,
-                "calificacion_min": args.calificacion_min,
-            },
+            filtros=filtros,
         )
     print("\n=== RESPUESTA RAG ===")
     print(resultado["respuesta"])
@@ -99,6 +140,10 @@ def build_parser():
     p_query.add_argument("--idioma", type=str, default=None)
     p_query.add_argument("--tipo", type=str, default=None)
     p_query.add_argument("--calificacion-min", type=float, default=None)
+    p_query.add_argument("--fecha-desde", type=str, default=None,
+                         help="Fecha mínima de publicación (YYYY-MM-DD)")
+    p_query.add_argument("--fecha-hasta", type=str, default=None,
+                         help="Fecha máxima de publicación (YYYY-MM-DD)")
 
     # evaluar
     p_eval = sub.add_parser("evaluar", help="Evalúa una consulta con RAGAS")
