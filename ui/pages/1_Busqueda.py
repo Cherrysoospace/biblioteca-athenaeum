@@ -1,8 +1,9 @@
-"""ui/pages/1_Busqueda.py — Búsqueda semántica principal (texto y multimodal)."""
+"""ui/pages/1_Busqueda.py — Búsqueda semántica principal (texto, imagen y multimodal)."""
 
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 _proj_root = str(Path(__file__).resolve().parent.parent.parent)
@@ -10,14 +11,12 @@ if _proj_root not in sys.path:
     sys.path.insert(0, _proj_root)
 
 import streamlit as st
-from sqlalchemy import select
 from core.database import get_session
 from core.config import TOP_K
 from pipeline.embeddings_minilm import get_embedding
 from pipeline.retrieval_texto import buscar_chunks_similares, buscar_hibrido_texto
-from pipeline.retrieval_imagen import buscar_imagenes_por_texto
-from pipeline.embeddings_clip import get_embedding_texto_clip
-from models.recursos import Recurso
+from pipeline.retrieval_imagen import buscar_imagenes_por_texto, buscar_imagenes_similares
+from pipeline.embeddings_clip import get_embedding_texto_clip, get_embedding_imagen
 from ui.components.result_card import render_result_card
 from ui.utils.session import set_query, set_results
 
@@ -27,13 +26,22 @@ st.title("🔍 Búsqueda Semántica")
 # ── Modo de búsqueda ──────────────────────────────────────────────────────
 modo = st.radio(
     "Modo de búsqueda",
-    ["Texto → Texto", "Texto → Imagen", "Híbrida"],
+    ["Texto → Texto", "Texto → Imagen", "Imagen → Imagen", "Híbrida"],
     horizontal=True,
     key="search_mode",
 )
 
-# ── Barra de búsqueda ─────────────────────────────────────────────────────
-query = st.text_input("Buscar", placeholder="Ej: obras de Gabriel García Márquez sobre realismo mágico...")
+# ── Input según modo ──────────────────────────────────────────────────────
+query = ""
+imagen_subida = None
+
+if modo == "Imagen → Imagen":
+    imagen_subida = st.file_uploader(
+        "Sube una imagen para buscar visualmente similares",
+        type=["jpg", "jpeg", "png", "webp"],
+    )
+else:
+    query = st.text_input("Buscar", placeholder="Ej: obras de Gabriel García Márquez sobre realismo mágico...")
 
 # ── Filtros colapsables ───────────────────────────────────────────────────
 with st.expander("Filtros avanzados", expanded=False):
@@ -51,8 +59,12 @@ with st.expander("Filtros avanzados", expanded=False):
     filtro_estrategia = st.selectbox("Estrategia de chunking", estrategias)
 
 # ── Ejecución de búsqueda ─────────────────────────────────────────────────
-if query:
-    set_query(query)
+debemos_buscar = (modo == "Imagen → Imagen" and imagen_subida is not None) or (modo != "Imagen → Imagen" and query)
+
+if debemos_buscar:
+    if query:
+        set_query(query)
+
     filtros: dict = {}
     if filtro_tipo:
         filtros["tipo"] = filtro_tipo
@@ -67,12 +79,20 @@ if query:
     with st.spinner("Buscando..."):
         try:
             with get_session() as session:
-                if modo == "Texto → Imagen":
-                    vector = get_embedding_texto_clip(query)
-                    resultados = buscar_imagenes_por_texto(session, query, top_k=TOP_K)
+                if modo == "Imagen → Imagen":
+                    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                        tmp.write(imagen_subida.read())
+                        tmp_path = tmp.name
+                    vector_img = get_embedding_imagen(tmp_path)
+                    Path(tmp_path).unlink(missing_ok=True)
+                    resultados_raw = buscar_imagenes_similares(session, vector_img, top_k=TOP_K)
+
+                elif modo == "Texto → Imagen":
+                    resultados_raw = buscar_imagenes_por_texto(session, query, top_k=TOP_K)
+
                 elif modo == "Híbrida":
                     vector = get_embedding(query)
-                    resultados = buscar_hibrido_texto(
+                    resultados_raw = buscar_hibrido_texto(
                         session, vector, top_k=TOP_K,
                         filtros=filtros if any(filtros.values()) else None,
                         estrategia=estrategia,
@@ -80,14 +100,27 @@ if query:
                 else:
                     vector = get_embedding(query)
                     if any(filtros.values()):
-                        resultados = buscar_hibrido_texto(
+                        resultados_raw = buscar_hibrido_texto(
                             session, vector, top_k=TOP_K,
                             filtros=filtros, estrategia=estrategia,
                         )
                     else:
-                        resultados = buscar_chunks_similares(
+                        resultados_raw = buscar_chunks_similares(
                             session, vector, top_k=TOP_K, estrategia=estrategia,
                         )
+
+            # Uniformizar resultados para render_result_card
+            resultados = []
+            for r in resultados_raw:
+                card = dict(r)
+                if "ruta_archivo" in card:
+                    card["ruta_imagen"] = card["ruta_archivo"]
+                if "descripcion_imagen" in card and "chunk_texto" not in card:
+                    card["chunk_texto"] = card["descripcion_imagen"]
+                if "tipo_imagen" in card and "tipo" not in card:
+                    card["tipo"] = card["tipo_imagen"]
+                resultados.append(card)
+
             set_results(resultados)
         except Exception as exc:
             st.error(f"Error en la búsqueda: {exc}")
