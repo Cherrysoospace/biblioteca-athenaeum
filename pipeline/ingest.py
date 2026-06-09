@@ -124,14 +124,14 @@ def ingest_recurso(
 
             if existing:
                 existing.chunk_texto = texto
-                existing.vector_embedding = vector
+                existing.vector_texto_384 = vector
             else:
                 emb = EmbeddingTexto(
                     recurso_id=recurso_id,
                     chunk_id=chunk_id,
                     chunk_texto=texto,
                     estrategia_chunking=estrategia,
-                    vector_embedding=vector,
+                    vector_texto_384=vector,
                 )
                 session.add(emb)
 

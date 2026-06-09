@@ -90,11 +90,11 @@ def buscar_por_resenas_semanticas(
             et.chunk_id,
             et.chunk_texto,
             et.estrategia_chunking,
-            1 - (et.vector_embedding <=> '{vec_str}'::vector) AS score,
+            1 - (et.vector_texto_384 <=> '{vec_str}'::vector) AS score,
             r.titulo AS titulo_recurso
         FROM embeddings_texto et
         JOIN recursos r ON r.id = et.recurso_id
-        ORDER BY et.vector_embedding <=> '{vec_str}'::vector
+        ORDER BY et.vector_texto_384 <=> '{vec_str}'::vector
         LIMIT :top_k
     """)
     rows = session.execute(sql, {"top_k": top_k}).mappings().all()

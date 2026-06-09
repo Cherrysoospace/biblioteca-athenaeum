@@ -76,6 +76,7 @@ def _llamar_llm_groq(pregunta: str, contexto: str) -> str:
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {LLM_API_KEY}",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         },
         method="POST",
     )
@@ -183,7 +184,7 @@ def run_rag(
 
     emb_consulta = EmbeddingConsulta(
         consulta_id=consulta.id,
-        vector_embedding=vector_pregunta,
+        vector_texto_384=vector_pregunta,
     )
     session.add(emb_consulta)
 

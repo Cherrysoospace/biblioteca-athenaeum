@@ -217,12 +217,12 @@ def buscar_textos_por_imagen(
             et.chunk_id,
             et.chunk_texto,
             et.estrategia_chunking,
-            1 - (et.vector_embedding <=> '{vec_str}'::vector) AS score,
+            1 - (et.vector_texto_384 <=> '{vec_str}'::vector) AS score,
             r.titulo AS titulo_recurso
         FROM embeddings_texto et
         JOIN recursos r ON r.id = et.recurso_id
         WHERE et.recurso_id IN ({ids_str})
-        ORDER BY et.vector_embedding <=> '{vec_str}'::vector
+        ORDER BY et.vector_texto_384 <=> '{vec_str}'::vector
         LIMIT :top_k
     """)
 

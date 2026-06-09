@@ -28,7 +28,7 @@ class EmbeddingTexto(Base):
         String(50), nullable=False, index=True
     )
     # Vector de 384 dimensiones (all-MiniLM-L6-v2)
-    vector_embedding: Mapped[list] = mapped_column(
+    vector_texto_384: Mapped[list] = mapped_column(
         Vector(EMBEDDING_DIM_TEXTO), nullable=False
     )
     modelo: Mapped[str] = mapped_column(

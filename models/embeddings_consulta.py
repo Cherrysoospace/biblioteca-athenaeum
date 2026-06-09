@@ -24,7 +24,7 @@ class EmbeddingConsulta(Base):
         unique=True,   # relación 1:1
     )
     # Vector de 384 dimensiones (debe coincidir con Embeddings_Texto para comparación)
-    vector_embedding: Mapped[list] = mapped_column(
+    vector_texto_384: Mapped[list] = mapped_column(
         Vector(EMBEDDING_DIM_TEXTO), nullable=False
     )
     modelo: Mapped[str] = mapped_column(

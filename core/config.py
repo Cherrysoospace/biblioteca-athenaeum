@@ -54,7 +54,7 @@ DATABASE_URL: str = _require("DATABASE_URL")
 # ── LLM ──────────────────────────────────────────────────────────────────────
 LLM_API_KEY: str = _get("GROQ_API_KEY", "") or _require("LLM_API_KEY")
 LLM_PROVIDER: str = _get("LLM_PROVIDER", "groq")          # "groq" | "huggingface"
-LLM_MODEL: str = _get("LLM_MODEL", "llama3-8b-8192")
+LLM_MODEL: str = _get("LLM_MODEL", "llama-3.3-70b-versatile")
 
 # URLs de API según proveedor
 _LLM_URLS = {
