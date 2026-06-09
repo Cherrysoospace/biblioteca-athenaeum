@@ -131,6 +131,7 @@ def run_rag(
     estrategia: Optional[str] = None,
     evaluar: bool = True,
     ground_truth: Optional[str] = None,
+    consulta_id: Optional[int] = None,
 ) -> dict:
     """
     Ejecuta el pipeline RAG completo.
@@ -144,6 +145,7 @@ def run_rag(
         estrategia: filtrar por estrategia de chunking específica.
         evaluar: si True, calcula y persiste métricas RAGAS.
         ground_truth: respuesta de referencia para context_recall (opcional).
+        consulta_id: si se proporciona, reusa esta consulta en vez de crear una nueva.
 
     Returns:
         dict con keys: consulta_id, pregunta, respuesta, contexto, metricas.
@@ -173,60 +175,87 @@ def run_rag(
 
     logger.info("RAG — Respuesta generada (%d chars)", len(respuesta))
 
-    # 4. Persistir en la BD: Consulta + EmbeddingConsulta + ResultadoConsulta
-    consulta = Consulta(
-        usuario_id=usuario_id,
-        texto_pregunta=pregunta,
-        fecha=datetime.utcnow(),
-    )
-    session.add(consulta)
-    session.flush()  # obtener consulta.id
-
-    emb_consulta = EmbeddingConsulta(
-        consulta_id=consulta.id,
-        vector_texto_384=vector_pregunta,
-    )
-    session.add(emb_consulta)
-
-    for posicion, chunk in enumerate(chunks, start=1):
-        resultado = ResultadoConsulta(
-            consulta_id=consulta.id,
-            embedding_texto_id=chunk["id"],
-            embedding_imagen_id=None,
-            score_similitud=round(float(chunk["score"]), 4),
-            posicion=posicion,
-        )
-        session.add(resultado)
-
-    session.flush()
-
-    # 5. Evaluación RAGAS (opcional)
+    # 4. Persistir todo en un savepoint para evitar consultas huérfanas
     metricas = None
-    if evaluar:
-        try:
-            contextos_recuperados = [c["chunk_texto"] for c in chunks]
-            metricas = calcular_metricas_ragas(
-                pregunta=pregunta,
-                respuesta=respuesta,
-                contextos=contextos_recuperados,
-                ground_truth=ground_truth,
-            )
-            evaluacion = Evaluacion(
-                consulta_id=consulta.id,
-                faithfulness=round(metricas["faithfulness"], 4),
-                answer_relevancy=round(metricas["answer_relevancy"], 4),
-                context_recall=round(metricas.get("context_recall", 0.0), 4),
-                context_precision=round(metricas.get("context_precision", 0.0), 4),
-                answer_correctness=round(metricas.get("answer_correctness", 0.0), 4),
-                fecha=datetime.utcnow(),
-            )
-            session.add(evaluacion)
-            session.flush()
-        except Exception as exc:
-            logger.warning("Error en evaluación RAGAS: %s", exc)
+    try:
+        with session.begin_nested():
+            if consulta_id is None:
+                consulta = Consulta(
+                    usuario_id=usuario_id,
+                    texto_pregunta=pregunta,
+                    fecha=datetime.utcnow(),
+                )
+                session.add(consulta)
+                session.flush()
+
+                emb_consulta = EmbeddingConsulta(
+                    consulta_id=consulta.id,
+                    vector_texto_384=vector_pregunta,
+                )
+                session.add(emb_consulta)
+
+                cid = consulta.id
+            else:
+                cid = consulta_id
+                # Recrear EmbeddingConsulta (limpiar el anterior para evitar duplicados)
+                session.execute(
+                    EmbeddingConsulta.__table__.delete()
+                    .where(EmbeddingConsulta.consulta_id == cid)
+                )
+                session.flush()
+                session.add(EmbeddingConsulta(
+                    consulta_id=cid,
+                    vector_texto_384=vector_pregunta,
+                ))
+                # Limpiar ResultadoConsulta previos para evitar acumulación
+                session.execute(
+                    ResultadoConsulta.__table__.delete()
+                    .where(ResultadoConsulta.consulta_id == cid)
+                )
+                session.flush()
+
+            for posicion, chunk in enumerate(chunks, start=1):
+                resultado = ResultadoConsulta(
+                    consulta_id=cid,
+                    embedding_texto_id=chunk["id"],
+                    embedding_imagen_id=None,
+                    score_similitud=round(float(chunk["score"]), 4),
+                    posicion=posicion,
+                )
+                session.add(resultado)
+
+            if evaluar:
+                contextos_recuperados = [c["chunk_texto"] for c in chunks]
+                metricas = calcular_metricas_ragas(
+                    pregunta=pregunta,
+                    respuesta=respuesta,
+                    contextos=contextos_recuperados,
+                    ground_truth=ground_truth,
+                )
+                evaluacion = Evaluacion(
+                    consulta_id=cid,
+                    faithfulness=round(metricas["faithfulness"], 4),
+                    answer_relevancy=round(metricas["answer_relevancy"], 4),
+                    context_recall=round(metricas.get("context_recall", 0.0), 4),
+                    context_precision=round(metricas.get("context_precision", 0.0), 4),
+                    answer_correctness=round(metricas.get("answer_correctness", 0.0), 4),
+                    fecha=datetime.utcnow(),
+                )
+                session.add(evaluacion)
+    except Exception as exc:
+        logger.warning("Error en ejecución RAG (savepoint revocado): %s", exc)
+        metricas = None
+        return {
+            "consulta_id": None,
+            "pregunta": pregunta,
+            "respuesta": respuesta,
+            "contexto": [],
+            "metricas": None,
+            "error": str(exc),
+        }
 
     return {
-        "consulta_id": consulta.id,
+        "consulta_id": cid,
         "pregunta": pregunta,
         "respuesta": respuesta,
         "contexto": [

@@ -26,6 +26,7 @@ Funciones principales:
 import logging
 from typing import Optional
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pipeline.embeddings_minilm import get_embedding, similitud_coseno
@@ -288,28 +289,51 @@ def evaluar_dataset(
     usuario_id: int,
     dataset: list[dict],
     estrategia: Optional[str] = None,
+    dedup: bool = True,
 ) -> list[dict]:
     """
     Evalúa un dataset de pares (pregunta, ground_truth) ejecutando el pipeline
     RAG completo para cada uno y registrando las métricas.
+
+    Reusa Consultas existentes (búscandolas por texto_pregunta) para no duplicar.
+    Si no existe una Consulta para la pregunta, la crea.
 
     Args:
         session: sesión SQLAlchemy.
         usuario_id: ID de usuario para registrar las consultas.
         dataset: lista de dicts con keys: pregunta, ground_truth.
         estrategia: estrategia de chunking a usar (opcional).
+        dedup: si True, elimina evaluaciones previas de las mismas preguntas.
 
     Returns:
         Lista de dicts con pregunta, ground_truth y todas las métricas.
     """
     import time
 
+    from models.consultas import Consulta
     from pipeline.rag import run_rag
+
+    preguntas = [item["pregunta"] for item in dataset if item.get("pregunta")]
+
+    # Mapa: pregunta -> consulta_id existente
+    existentes = {
+        row.texto_pregunta: row.id
+        for row in session.execute(
+            select(Consulta.id, Consulta.texto_pregunta).where(
+                Consulta.texto_pregunta.in_(preguntas)
+            )
+        ).all()
+    }
+
+    if dedup:
+        estrategias_list = [estrategia] if estrategia else None
+        _eliminar_consultas_previas(session, preguntas, estrategias_list)
 
     resultados = []
     for idx, item in enumerate(dataset):
         pregunta = item["pregunta"]
         ground_truth = item.get("ground_truth")
+        consulta_id = existentes.get(pregunta)
 
         if idx > 0:
             time.sleep(1.5)
@@ -322,21 +346,31 @@ def evaluar_dataset(
                 estrategia=estrategia,
                 evaluar=True,
                 ground_truth=ground_truth,
+                consulta_id=consulta_id,
             )
-            m = resultado.get("metricas") or {}
-            resultados.append({
-                "pregunta": pregunta,
-                "ground_truth": ground_truth,
-                "faithfulness": m.get("faithfulness", 0.0),
-                "answer_relevancy": m.get("answer_relevancy", 0.0),
-                "context_recall": m.get("context_recall", 0.0),
-                "context_precision": m.get("context_precision", 0.0),
-                "answer_correctness": m.get("answer_correctness", 0.0),
-                "consulta_id": resultado["consulta_id"],
-            })
+            error = resultado.get("error")
+            if error:
+                logger.error("Error evaluando '%s...': %s", pregunta[:40], error)
+                resultados.append({
+                    "pregunta": pregunta,
+                    "ground_truth": ground_truth,
+                    "error": error,
+                })
+            else:
+                m = resultado.get("metricas") or {}
+                resultados.append({
+                    "pregunta": pregunta,
+                    "ground_truth": ground_truth,
+                    "faithfulness": m.get("faithfulness", 0.0),
+                    "answer_relevancy": m.get("answer_relevancy", 0.0),
+                    "context_recall": m.get("context_recall", 0.0),
+                    "context_precision": m.get("context_precision", 0.0),
+                    "answer_correctness": m.get("answer_correctness", 0.0),
+                    "consulta_id": resultado["consulta_id"],
+                })
         except Exception as exc:
             session.rollback()
-            logger.error("Error evaluando '%s...': %s", pregunta[:40], exc)
+            logger.error("Error inesperado evaluando '%s...': %s", pregunta[:40], exc)
             resultados.append({
                 "pregunta": pregunta,
                 "ground_truth": ground_truth,
@@ -348,22 +382,83 @@ def evaluar_dataset(
 
 # ── Experimento de chunking: evaluar 10 consultas × 3 estrategias ─────────────
 
+def _eliminar_consultas_previas(
+    session: Session,
+    preguntas: list[str],
+    estrategias: Optional[list[str]] = None,
+) -> None:
+    """Elimina evaluaciones y resultados previos de las consultas dadas
+    (sin borrar Consultas ni EmbeddingConsulta, para reusarlos).
+    Los cambios se confirman cuando el `get_session()` externo haga commit."""
+    from models.consultas import ResultadoConsulta, Evaluacion, Consulta
+
+    stmt = select(Consulta.id).where(Consulta.texto_pregunta.in_(preguntas))
+    consulta_ids = list(session.scalars(stmt).all())
+    if not consulta_ids:
+        return
+
+    if estrategias:
+        from models.embeddings_texto import EmbeddingTexto
+
+        subq = (
+            select(ResultadoConsulta.consulta_id)
+            .join(EmbeddingTexto, EmbeddingTexto.id == ResultadoConsulta.embedding_texto_id)
+            .where(
+                ResultadoConsulta.consulta_id.in_(consulta_ids),
+                EmbeddingTexto.estrategia_chunking.in_(estrategias),
+            )
+        )
+        consulta_ids = list(session.scalars(subq).all())
+        if not consulta_ids:
+            return
+
+    session.execute(
+        ResultadoConsulta.__table__.delete()
+        .where(ResultadoConsulta.consulta_id.in_(consulta_ids))
+    )
+    session.execute(
+        Evaluacion.__table__.delete()
+        .where(Evaluacion.consulta_id.in_(consulta_ids))
+    )
+
+
 def experimento_chunking(
     session: Session,
     usuario_id: int,
     consultas: list[dict],
     estrategias: Optional[list[str]] = None,
+    dedup: bool = True,
 ) -> list[dict]:
     """
     Ejecuta el experimento comparativo de las 10 consultas de prueba del proyecto
     sobre las 3 estrategias de chunking y registra las métricas RAGAS.
+
+    Reusa Consultas existentes (búscandolas por texto_pregunta) para no duplicar.
+
+    Si dedup=True, elimina evaluaciones previas de las mismas preguntas+estrategias.
     """
     import time
 
+    from models.consultas import Consulta
     from pipeline.rag import run_rag
 
     if estrategias is None:
         estrategias = ["fixed_size", "sentence_aware", "semantic"]
+
+    preguntas = [c["pregunta"] for c in consultas if c.get("pregunta")]
+
+    # Mapa: pregunta -> consulta_id existente
+    existentes = {
+        row.texto_pregunta: row.id
+        for row in session.execute(
+            select(Consulta.id, Consulta.texto_pregunta).where(
+                Consulta.texto_pregunta.in_(preguntas)
+            )
+        ).all()
+    }
+
+    if dedup:
+        _eliminar_consultas_previas(session, preguntas, estrategias)
 
     resultados = []
     total = len(consultas) * len(estrategias)
@@ -371,6 +466,7 @@ def experimento_chunking(
         pregunta = consulta_cfg["pregunta"]
         ground_truth = consulta_cfg.get("ground_truth")
         filtros = consulta_cfg.get("filtros")
+        consulta_id = existentes.get(pregunta)
 
         for est_idx, estrategia in enumerate(estrategias):
             call_num = idx * len(estrategias) + est_idx
@@ -390,22 +486,35 @@ def experimento_chunking(
                     estrategia=estrategia,
                     evaluar=True,
                     ground_truth=ground_truth,
+                    consulta_id=consulta_id,
                 )
-                m = resultado.get("metricas") or {}
-                resultados.append({
-                    "pregunta": pregunta,
-                    "estrategia": estrategia,
-                    "faithfulness": m.get("faithfulness", 0.0),
-                    "answer_relevancy": m.get("answer_relevancy", 0.0),
-                    "context_recall": m.get("context_recall", 0.0),
-                    "context_precision": m.get("context_precision", 0.0),
-                    "answer_correctness": m.get("answer_correctness", 0.0),
-                    "consulta_id": resultado["consulta_id"],
-                })
+                error = resultado.get("error")
+                if error:
+                    logger.error(
+                        "Error experimento pregunta='%s' estrategia=%s: %s",
+                        pregunta[:40], estrategia, error,
+                    )
+                    resultados.append({
+                        "pregunta": pregunta,
+                        "estrategia": estrategia,
+                        "error": error,
+                    })
+                else:
+                    m = resultado.get("metricas") or {}
+                    resultados.append({
+                        "pregunta": pregunta,
+                        "estrategia": estrategia,
+                        "faithfulness": m.get("faithfulness", 0.0),
+                        "answer_relevancy": m.get("answer_relevancy", 0.0),
+                        "context_recall": m.get("context_recall", 0.0),
+                        "context_precision": m.get("context_precision", 0.0),
+                        "answer_correctness": m.get("answer_correctness", 0.0),
+                        "consulta_id": resultado["consulta_id"],
+                    })
             except Exception as exc:
                 session.rollback()
                 logger.error(
-                    "Error en experimento pregunta='%s' estrategia=%s: %s",
+                    "Error inesperado experimento pregunta='%s' estrategia=%s: %s",
                     pregunta[:40], estrategia, exc,
                 )
                 resultados.append({

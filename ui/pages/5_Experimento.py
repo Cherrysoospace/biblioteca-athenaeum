@@ -11,7 +11,7 @@ if _proj_root not in sys.path:
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy import select
+from sqlalchemy import select, func
 from core.database import get_session
 from models.consultas import Evaluacion, Consulta
 from pipeline.evaluacion import experimento_chunking, evaluar_dataset
@@ -30,7 +30,54 @@ tab_comparativa, tab_dataset, tab_ejecutar = st.tabs([
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1: Comparativa por estrategia de chunking
 # ══════════════════════════════════════════════════════════════════════════════
+# ── Limpieza de evaluaciones ──────────────────────────────────────────────────
+
+def limpiar_evaluaciones(session) -> int:
+    """Elimina Evaluaciones, Resultados y Embeddings de Consulta (conserva las Consultas)."""
+    from models.embeddings_consulta import EmbeddingConsulta
+    from models.consultas import ResultadoConsulta, Evaluacion
+
+    evals = session.execute(
+        select(Evaluacion.id, Evaluacion.consulta_id)
+    ).all()
+    consulta_ids = list({r.consulta_id for r in evals if r.consulta_id})
+    n_evals = len(evals)
+    if not consulta_ids:
+        return 0
+
+    session.execute(
+        ResultadoConsulta.__table__.delete()
+        .where(ResultadoConsulta.consulta_id.in_(consulta_ids))
+    )
+    session.execute(
+        EmbeddingConsulta.__table__.delete()
+        .where(EmbeddingConsulta.consulta_id.in_(consulta_ids))
+    )
+    session.execute(
+        Evaluacion.__table__.delete()
+        .where(Evaluacion.consulta_id.in_(consulta_ids))
+    )
+    session.commit()
+
+    total = n_evals + len(consulta_ids) * 2
+    return total
+
+
 with tab_comparativa:
+    col_header, col_btn = st.columns([3, 1])
+    with col_header:
+        st.subheader("Comparativa por estrategia de chunking")
+    with col_btn:
+        with get_session() as session:
+            count = session.scalar(select(func.count(Evaluacion.id)))
+        if count and count > 0:
+            if st.button("🗑️ Limpiar evaluaciones", type="secondary"):
+                with get_session() as session:
+                    n = limpiar_evaluaciones(session)
+                st.success(f"{n} registros eliminados.")
+                st.cache_data.clear()
+                st.rerun()
+
     @st.cache_data(ttl=60)
     def cargar_comparativa_estrategias() -> pd.DataFrame:
         from models.embeddings_texto import EmbeddingTexto
@@ -225,6 +272,7 @@ with tab_ejecutar:
 
     if ejecutar:
         st.session_state.experiment_running = True
+        st.session_state.exp_resultados = None
         consultas_prueba = [
             {"pregunta": "¿Qué obras de Gabriel García Márquez hay en la biblioteca?"},
             {"pregunta": "¿Qué recursos hay sobre literatura latinoamericana contemporánea?"},
@@ -260,11 +308,28 @@ with tab_ejecutar:
             progress_bar.progress(1.0, text="Experimento completado")
             status_text.write("✅ Experimento finalizado exitosamente.")
             st.success(f"Experimento completado: {len(resultados)} evaluaciones generadas.")
+            st.session_state.exp_resultados = resultados
             st.cache_data.clear()
-            st.rerun()
 
         except Exception as exc:
             st.error(f"Error durante el experimento: {exc}")
             status_text.write(f"❌ Error: {exc}")
 
         st.session_state.experiment_running = False
+
+    # Mostrar resultados del experimento siempre que existan en sesión
+    if st.session_state.get("exp_resultados"):
+        df_exp = pd.DataFrame(st.session_state.exp_resultados)
+        n_ok = len(df_exp)
+        n_err = df_exp["error"].notna().sum() if "error" in df_exp.columns else 0
+        n_ok -= n_err
+
+        if n_err:
+            st.warning(f"{n_err} de {len(df_exp)} consultas fallaron.")
+            with st.expander("Ver errores", expanded=True):
+                st.dataframe(
+                    df_exp[df_exp["error"].notna()][["pregunta", "estrategia", "error"]],
+                    use_container_width=True, hide_index=True,
+                )
+        if n_ok:
+            st.success(f"{n_ok} consultas ejecutadas correctamente.")

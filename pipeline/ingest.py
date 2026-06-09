@@ -42,6 +42,8 @@ def _recolectar_textos(recurso: Recurso, session: Session) -> str:
 
     if recurso.titulo:
         partes.append(recurso.titulo)
+    if recurso.fecha_publicacion:
+        partes.append(f"Fecha de publicación: {recurso.fecha_publicacion}")
     if recurso.descripcion:
         partes.append(recurso.descripcion)
 
