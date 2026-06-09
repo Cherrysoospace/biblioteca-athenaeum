@@ -140,7 +140,35 @@ def ingest_recurso(
         session.flush()
         logger.info("  %d embeddings de texto insertados (estrategia=%s)", len(chunks), estrategia)
 
-    # ── 2. Embeddings de imagen (CLIP) ─────────────────────────────────────────
+    # ── 2. Embedding del título como chunk independiente ──────────────────────
+    if recurso.titulo:
+        logger.info("  Embedding de título ...")
+        [vec_titulo] = get_embeddings_batch([recurso.titulo])
+        existing = session.execute(
+            select(EmbeddingTexto).where(
+                EmbeddingTexto.recurso_id == recurso_id,
+                EmbeddingTexto.chunk_id == 0,
+                EmbeddingTexto.estrategia_chunking == "title",
+            )
+        ).scalar_one_or_none()
+
+        if existing:
+            existing.chunk_texto = recurso.titulo
+            existing.vector_texto_384 = vec_titulo
+        else:
+            emb = EmbeddingTexto(
+                recurso_id=recurso_id,
+                chunk_id=0,
+                chunk_texto=recurso.titulo,
+                estrategia_chunking="title",
+                vector_texto_384=vec_titulo,
+            )
+            session.add(emb)
+
+        stats["embeddings_texto"] += 1
+        logger.info("  Embedding de título insertado")
+
+    # ── 3. Embeddings de imagen (CLIP) ─────────────────────────────────────────
     if vectorizar_imagenes:
         for imagen in recurso.imagenes:
             try:

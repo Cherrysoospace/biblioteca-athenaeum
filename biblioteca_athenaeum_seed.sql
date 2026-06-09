@@ -166,7 +166,7 @@ CREATE TABLE Embeddings_Texto (
     chunk_id            INT          NOT NULL,
     chunk_texto         TEXT         NOT NULL,
     estrategia_chunking VARCHAR(50)  NOT NULL
-                            CHECK (estrategia_chunking IN ('fixed_size', 'sentence_aware', 'semantic')),
+                            CHECK (estrategia_chunking IN ('fixed_size', 'sentence_aware', 'semantic', 'title')),
     vector_embedding    vector(384)  NOT NULL,
     modelo              VARCHAR(200) NOT NULL DEFAULT 'all-MiniLM-L6-v2'
 );
