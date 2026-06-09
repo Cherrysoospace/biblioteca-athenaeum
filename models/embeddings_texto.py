@@ -7,7 +7,7 @@ específica (fixed_size | sentence_aware | semantic).
 """
 
 from typing import Optional
-from sqlalchemy import String, Text, Integer, ForeignKey
+from sqlalchemy import String, Text, Integer, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
 
@@ -17,6 +17,13 @@ from core.config import EMBEDDING_DIM_TEXTO, MINILM_MODEL
 
 class EmbeddingTexto(Base):
     __tablename__ = "embeddings_texto"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "recurso_id", "chunk_id", "estrategia_chunking",
+            name="uq_recurso_chunk_estrategia"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     recurso_id: Mapped[int] = mapped_column(
@@ -28,8 +35,12 @@ class EmbeddingTexto(Base):
         String(50), nullable=False, index=True
     )
     # Vector de 384 dimensiones (all-MiniLM-L6-v2)
-    vector_embedding: Mapped[list] = mapped_column(
+    vector_texto_384: Mapped[list] = mapped_column(
         Vector(EMBEDDING_DIM_TEXTO), nullable=False
+    )
+    # Vector de 512 dimensiones (CLIP) para soporte multimodal
+    vector_multimodal_512: Mapped[Optional[list]] = mapped_column(
+        Vector(512), nullable=True
     )
     modelo: Mapped[str] = mapped_column(
         String(200), nullable=False, default=MINILM_MODEL

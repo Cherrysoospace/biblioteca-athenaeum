@@ -5,6 +5,7 @@ Sistema híbrido relacional-vectorial (RAG)
 
 import argparse
 import sys
+import models  # <-- IMPORTANTE: Registra todos los modelos ORM antes de usarlos
 from core.database import init_db, get_session
 from pipeline.ingest import ingest_recurso
 from pipeline.rag import run_rag
@@ -105,7 +106,6 @@ def build_parser():
     p_eval.add_argument("consulta_id", type=int)
 
     return parser
-
 
 if __name__ == "__main__":
     parser = build_parser()

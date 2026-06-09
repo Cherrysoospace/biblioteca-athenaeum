@@ -36,8 +36,8 @@ def _load_clip():
         return _clip_model, _clip_processor
 
     try:
+        logger.info("Cargando modelo CLIP: %s (puede tomar ~2min la primera vez)...", CLIP_MODEL)
         from transformers import CLIPModel, CLIPProcessor
-        logger.info("Cargando modelo CLIP: %s ...", CLIP_MODEL)
         _clip_processor = CLIPProcessor.from_pretrained(CLIP_MODEL)
         _clip_model = CLIPModel.from_pretrained(CLIP_MODEL)
         _clip_model.eval()

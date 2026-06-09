@@ -30,8 +30,8 @@ def _load_model():
     if _model is not None:
         return _model
     try:
+        logger.info("Cargando modelo MiniLM: %s (puede tomar ~30s la primera vez)...", MINILM_MODEL)
         from sentence_transformers import SentenceTransformer
-        logger.info("Cargando modelo MiniLM: %s ...", MINILM_MODEL)
         _model = SentenceTransformer(MINILM_MODEL)
         logger.info("Modelo MiniLM listo (dim=%d).", EMBEDDING_DIM_TEXTO)
     except ImportError as exc:

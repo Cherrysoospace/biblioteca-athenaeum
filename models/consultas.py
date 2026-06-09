@@ -7,7 +7,7 @@ from typing import Optional
 
 from sqlalchemy import (
     Text, DateTime, SmallInteger, Numeric, Integer,
-    ForeignKey, func, CheckConstraint,
+    ForeignKey, func, CheckConstraint, String
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,7 +21,8 @@ class Consulta(Base):
     usuario_id: Mapped[int] = mapped_column(
         ForeignKey("usuarios.id", ondelete="CASCADE"), nullable=False
     )
-    texto_pregunta: Mapped[str] = mapped_column(Text, nullable=False)
+    texto_pregunta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    imagen_pregunta: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     fecha: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

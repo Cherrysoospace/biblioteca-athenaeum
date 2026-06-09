@@ -13,7 +13,8 @@ La función principal es `run_rag(session, usuario_id, pregunta, ...)`.
 
 import json
 import logging
-import urllib.request
+import math
+import requests
 from datetime import datetime
 from typing import Optional
 
@@ -56,7 +57,7 @@ def _construir_contexto(chunks: list[dict]) -> str:
 
 
 def _llamar_llm_groq(pregunta: str, contexto: str) -> str:
-    """Llama a la API de Groq (compatible con OpenAI)."""
+    """Llama a la API de Groq (compatible con OpenAI) usando requests."""
     payload = {
         "model": LLM_MODEL,
         "messages": [
@@ -69,39 +70,35 @@ def _llamar_llm_groq(pregunta: str, contexto: str) -> str:
         "temperature": 0.3,
         "max_tokens": 800,
     }
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
+    resp = requests.post(
         LLM_API_URL,
-        data=data,
+        json=payload,
         headers={
-            "Content-Type": "application/json",
             "Authorization": f"Bearer {LLM_API_KEY}",
         },
-        method="POST",
+        timeout=30,
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        result = json.loads(resp.read())
+    resp.raise_for_status()
+    result = resp.json()
     return result["choices"][0]["message"]["content"].strip()
 
 
 def _llamar_llm_huggingface(pregunta: str, contexto: str) -> str:
-    """Llama a HuggingFace Inference API."""
+    """Llama a HuggingFace Inference API usando requests."""
     prompt = (
         f"{_SYSTEM_PROMPT}\n\nContexto:\n{contexto}\n\nPregunta: {pregunta}\nRespuesta:"
     )
     payload = {"inputs": prompt, "parameters": {"max_new_tokens": 800, "temperature": 0.3}}
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
+    resp = requests.post(
         LLM_API_URL,
-        data=data,
+        json=payload,
         headers={
-            "Content-Type": "application/json",
             "Authorization": f"Bearer {LLM_API_KEY}",
         },
-        method="POST",
+        timeout=60,
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        result = json.loads(resp.read())
+    resp.raise_for_status()
+    result = resp.json()
     if isinstance(result, list):
         return result[0].get("generated_text", "").replace(prompt, "").strip()
     return result.get("generated_text", str(result))
@@ -183,17 +180,27 @@ def run_rag(
 
     emb_consulta = EmbeddingConsulta(
         consulta_id=consulta.id,
-        vector_embedding=vector_pregunta,
+        vector_texto_384=vector_pregunta,
     )
     session.add(emb_consulta)
 
-    for posicion, chunk in enumerate(chunks, start=1):
+    # Filtrar chunks con score inválido (NaN/Inf) ANTES de procesar
+    chunks_validos = []
+    for chunk in chunks:
+        score = float(chunk["score"])
+        if not math.isnan(score) and not math.isinf(score):
+            chunk["score"] = max(0.0, min(1.0, score))
+            chunks_validos.append(chunk)
+
+    posicion_real = 0
+    for chunk in chunks_validos:
+        posicion_real += 1
         resultado = ResultadoConsulta(
             consulta_id=consulta.id,
             embedding_texto_id=chunk["id"],
             embedding_imagen_id=None,
-            score_similitud=round(float(chunk["score"]), 4),
-            posicion=posicion,
+            score_similitud=round(chunk["score"], 4),
+            posicion=posicion_real,
         )
         session.add(resultado)
 
@@ -203,7 +210,7 @@ def run_rag(
     metricas = None
     if evaluar:
         try:
-            contextos_recuperados = [c["chunk_texto"] for c in chunks]
+            contextos_recuperados = [c["chunk_texto"] for c in chunks_validos]
             metricas = calcular_metricas_ragas(
                 pregunta=pregunta,
                 respuesta=respuesta,
@@ -233,7 +240,7 @@ def run_rag(
                 "recurso": c.get("titulo_recurso"),
                 "estrategia": c.get("estrategia_chunking"),
             }
-            for c in chunks
+            for c in chunks_validos
         ],
         "metricas": metricas,
     }

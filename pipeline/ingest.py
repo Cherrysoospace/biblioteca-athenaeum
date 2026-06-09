@@ -112,6 +112,18 @@ def ingest_recurso(
 
         vectores = get_embeddings_batch(chunks)
 
+        for i, v in enumerate(vectores):
+            if all(x == 0.0 for x in v):
+                logger.warning(
+                    "Vector cero detectado recurso_id=%d estrategia=%s chunk=%d: texto='%s...'",
+                    recurso_id, estrategia, i + 1, chunks[i][:80]
+                )
+            else:
+                logger.info(
+                    "Vector OK recurso_id=%d estrategia=%s chunk=%d: dim=%d primeros_valores=[%.4f, %.4f, %.4f, %.4f, %.4f]",
+                    recurso_id, estrategia, i + 1, len(v), v[0], v[1], v[2], v[3], v[4]
+                )
+
         for chunk_id, (texto, vector) in enumerate(zip(chunks, vectores), start=1):
             # Upsert: eliminar si ya existe la combinación
             existing = session.execute(
@@ -124,14 +136,14 @@ def ingest_recurso(
 
             if existing:
                 existing.chunk_texto = texto
-                existing.vector_embedding = vector
+                existing.vector_texto_384 = vector
             else:
                 emb = EmbeddingTexto(
                     recurso_id=recurso_id,
                     chunk_id=chunk_id,
                     chunk_texto=texto,
                     estrategia_chunking=estrategia,
-                    vector_embedding=vector,
+                    vector_texto_384=vector,
                 )
                 session.add(emb)
 

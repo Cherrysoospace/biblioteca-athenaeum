@@ -167,17 +167,22 @@ CREATE TABLE Embeddings_Texto (
     chunk_texto         TEXT         NOT NULL,
     estrategia_chunking VARCHAR(50)  NOT NULL
                             CHECK (estrategia_chunking IN ('fixed_size', 'sentence_aware', 'semantic')),
-    vector_embedding    vector(384)  NOT NULL,
+    vector_texto_384    vector(384)  NOT NULL,
     modelo              VARCHAR(200) NOT NULL DEFAULT 'all-MiniLM-L6-v2'
 );
 
 CREATE INDEX idx_emb_texto_vector
     ON Embeddings_Texto
-    USING hnsw (vector_embedding vector_cosine_ops)
+    USING hnsw (vector_texto_384 vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
 CREATE INDEX idx_emb_texto_estrategia ON Embeddings_Texto (estrategia_chunking);
 CREATE INDEX idx_emb_texto_recurso    ON Embeddings_Texto (recurso_id);
+
+-- Evita duplicados y asegura que el upsert funcione correctamente
+ALTER TABLE Embeddings_Texto
+    ADD CONSTRAINT uq_recurso_chunk_estrategia
+    UNIQUE (recurso_id, chunk_id, estrategia_chunking);
 
 CREATE TABLE Embeddings_Imagen (
     id               SERIAL PRIMARY KEY,
@@ -194,13 +199,13 @@ CREATE INDEX idx_emb_imagen_vector
 CREATE TABLE Embeddings_Consulta (
     id               SERIAL PRIMARY KEY,
     consulta_id      INT          NOT NULL UNIQUE REFERENCES Consultas(id) ON DELETE CASCADE,
-    vector_embedding vector(384)  NOT NULL,
+    vector_texto_384 vector(384)  NOT NULL,
     modelo           VARCHAR(200) NOT NULL DEFAULT 'all-MiniLM-L6-v2'
 );
 
 CREATE INDEX idx_emb_consulta_vector
     ON Embeddings_Consulta
-    USING hnsw (vector_embedding vector_cosine_ops)
+    USING hnsw (vector_texto_384 vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
 
@@ -490,7 +495,7 @@ INSERT INTO Evaluaciones (consulta_id, faithfulness, answer_relevancy, context_r
 -- En producción estos vectores se generan con all-MiniLM-L6-v2
 -- Para el seed usamos vectores de ceros normalizados como placeholder
 -- ------------------------------------------------------------
-INSERT INTO Embeddings_Texto (recurso_id, chunk_id, chunk_texto, estrategia_chunking, vector_embedding) VALUES
+INSERT INTO Embeddings_Texto (recurso_id, chunk_id, chunk_texto, estrategia_chunking, vector_texto_384) VALUES
 (1, 1, 'El laberinto de la soledad explora la psicología del mexicano a través de la soledad, los mitos nacionales y la identidad histórica.',                              'sentence_aware', array_fill(0.0, ARRAY[384])::vector),
 (1, 2, 'Octavio Paz analiza cómo la máscara social del mexicano encubre una soledad profunda heredada de la conquista y el mestizaje cultural.',                            'sentence_aware', array_fill(0.0, ARRAY[384])::vector),
 (2, 1, 'Macondo nació como un pueblo de veinte casas de barro y cañabrava construidas a la orilla de un río de aguas diáfanas que se precipitaban por un lecho de piedras pulidas.',  'fixed_size',     array_fill(0.0, ARRAY[384])::vector),
@@ -525,7 +530,7 @@ INSERT INTO Embeddings_Imagen (imagen_id, vector_embedding) VALUES
 -- ------------------------------------------------------------
 -- Embeddings_Consulta (12 filas — vectores placeholder de 384 dims)
 -- ------------------------------------------------------------
-INSERT INTO Embeddings_Consulta (consulta_id, vector_embedding) VALUES
+INSERT INTO Embeddings_Consulta (consulta_id, vector_texto_384) VALUES
 (1,  array_fill(0.0, ARRAY[384])::vector),
 (2,  array_fill(0.0, ARRAY[384])::vector),
 (3,  array_fill(0.0, ARRAY[384])::vector),

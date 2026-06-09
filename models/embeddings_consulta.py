@@ -9,6 +9,7 @@ Relación 1:1 con Consultas (consulta_id UNIQUE).
 from sqlalchemy import String, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
+from typing import Optional
 
 from core.database import Base
 from core.config import EMBEDDING_DIM_TEXTO, MINILM_MODEL
@@ -24,8 +25,12 @@ class EmbeddingConsulta(Base):
         unique=True,   # relación 1:1
     )
     # Vector de 384 dimensiones (debe coincidir con Embeddings_Texto para comparación)
-    vector_embedding: Mapped[list] = mapped_column(
-        Vector(EMBEDDING_DIM_TEXTO), nullable=False
+    vector_texto_384: Mapped[Optional[list]] = mapped_column(
+        Vector(EMBEDDING_DIM_TEXTO), nullable=True
+    )
+    # Vector de 512 dimensiones (CLIP) para multimodal
+    vector_multimodal_512: Mapped[Optional[list]] = mapped_column(
+        Vector(512), nullable=True
     )
     modelo: Mapped[str] = mapped_column(
         String(200), nullable=False, default=MINILM_MODEL

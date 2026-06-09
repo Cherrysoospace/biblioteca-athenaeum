@@ -60,12 +60,12 @@ def buscar_chunks_similares(
             et.chunk_id,
             et.chunk_texto,
             et.estrategia_chunking,
-            1 - (et.vector_embedding <=> '{vec_str}'::vector) AS score,
+            1 - (et.vector_texto_384 <=> '{vec_str}'::vector) AS score,
             r.titulo AS titulo_recurso
         FROM embeddings_texto et
         JOIN recursos r ON r.id = et.recurso_id
         WHERE 1=1 {where_estrategia}
-        ORDER BY et.vector_embedding <=> '{vec_str}'::vector
+        ORDER BY et.vector_texto_384 <=> '{vec_str}'::vector
         LIMIT :top_k
     """)
 
@@ -140,14 +140,14 @@ def buscar_hibrido_texto(
             et.chunk_id,
             et.chunk_texto,
             et.estrategia_chunking,
-            1 - (et.vector_embedding <=> '{vec_str}'::vector) AS score,
+            1 - (et.vector_texto_384 <=> '{vec_str}'::vector) AS score,
             r.titulo  AS titulo_recurso,
             r.idioma  AS idioma,
             r.tipo    AS tipo
         FROM embeddings_texto et
         JOIN recursos r ON r.id = et.recurso_id
         WHERE {where_clause}
-        ORDER BY et.vector_embedding <=> '{vec_str}'::vector
+        ORDER BY et.vector_texto_384 <=> '{vec_str}'::vector
         LIMIT :top_k
     """)
 
