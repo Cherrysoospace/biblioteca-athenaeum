@@ -42,9 +42,8 @@ st.markdown("---")
 
 # ── Navegación con pestañas
 st.markdown("### Navegación")
-st.page_link("pages/1_Busqueda.py", label="🔍  Búsqueda Semántica", use_container_width=True)
+st.page_link("pages/1_Busqueda.py", label="🔍  Búsqueda y Chat RAG", use_container_width=True)
 st.page_link("pages/2_Catalogo.py", label="📚  Catálogo Relacional", use_container_width=True)
-st.page_link("pages/3_RAG_Chat.py", label="💬  Chat RAG", use_container_width=True)
 st.page_link("pages/4_Evaluacion.py", label="📊  Dashboard RAGAS", use_container_width=True)
 st.page_link("pages/5_Experimento.py", label="🧪  Experimento Chunking", use_container_width=True)
 st.page_link("pages/6_Administracion.py", label="⚙  Administración", use_container_width=True)

@@ -1,4 +1,4 @@
-"""ui/pages/1_Busqueda.py — Búsqueda semántica principal (texto, imagen y multimodal)."""
+"""ui/pages/1_Busqueda.py — Búsqueda semántica y Chat RAG fusionados."""
 
 from __future__ import annotations
 
@@ -18,8 +18,10 @@ from pipeline.embeddings_minilm import get_embedding
 from pipeline.retrieval_texto import buscar_chunks_similares, buscar_hibrido_texto
 from pipeline.retrieval_imagen import buscar_imagenes_por_texto, buscar_imagenes_similares, buscar_imagenes_hibrido
 from pipeline.embeddings_clip import get_embedding_texto_clip, get_embedding_imagen
+from pipeline.rag import run_rag
+from pipeline.evaluacion import calcular_metricas_ragas
 from ui.components.result_card import render_result_card
-from ui.utils.session import set_query, set_results
+from ui.utils.session import set_query, set_results, get_usuario_id, add_message, clear_messages, set_rag_context
 
 
 _RE_ANIO = r'\b(1[89]\d{2}|20[0-2]\d)\b'
@@ -30,19 +32,17 @@ def _auto_detectar_filtros(query: str, filtros_explicitos: dict) -> dict:
 
     Los filtros explícitos tienen prioridad sobre los detectados automáticamente.
     Soporta:
-      - "en 2000", "de 2000"          → rango cerrado [2000-01-01, 2000-12-31]
-      - "antes de 2000", "previo a"    → solo fecha_hasta ≤ 2000-12-31
-      - "después de 2000", "posterior" → solo fecha_desde ≥ 2000-01-01
-      - "desde 2000"                   → solo fecha_desde ≥ 2000-01-01
-      - "hasta 2000"                   → solo fecha_hasta ≤ 2000-12-31
+      - "en 2000", "de 2000"          -> rango cerrado [2000-01-01, 2000-12-31]
+      - "antes de 2000", "previo a"    -> solo fecha_hasta <= 2000-12-31
+      - "después de 2000", "posterior" -> solo fecha_desde >= 2000-01-01
+      - "desde 2000"                   -> solo fecha_desde >= 2000-01-01
+      - "hasta 2000"                   -> solo fecha_hasta <= 2000-12-31
     """
     result = dict(filtros_explicitos)
 
-    # Detectar año direccional si no hay filtros de fecha explícitos
     if "fecha_desde" not in result and "fecha_hasta" not in result:
         _detectar_fecha_desde_query(query, result)
 
-    # Detectar tipo si no se especificó explícitamente
     if "tipo" not in result:
         _detectar_tipo_desde_query(query, result)
 
@@ -59,38 +59,31 @@ def _detectar_fecha_desde_query(query: str, result: dict) -> None:
     pre = query[: year_match.start()].lower()
     post = query[year_match.end():].lower()
 
-    # "antes/años pretéritos/previo a {year}"
     if re.search(r'(antes|pret[eé]rito|previo|anterior)\s*(de|a|al)?\s*$', pre) or \
        re.search(r'previo|anterior', pre):
         result["fecha_hasta"] = f"{anio}-12-31"
         return
 
-    # "después/posterior/subsiguiente a {year}"
     if re.search(r'(despu[eé]s|posterior|subsiguiente|luego)\s*(de|a|al)?\s*$', pre):
         result["fecha_desde"] = f"{anio}-01-01"
         return
 
-    # "desde {year}" / "a partir de {year}"
     if re.search(r'(desde|a\s*partir\s*de)\s*$', pre):
         result["fecha_desde"] = f"{anio}-01-01"
         return
 
-    # "hasta {year}" / "como máximo {year}"
     if re.search(r'(hasta|como\s*m[aá]ximo)\s*$', pre):
         result["fecha_hasta"] = f"{anio}-12-31"
         return
 
-    # "{year} en adelante" / "{year} en luego"
     if re.search(r'^\s*(en\s*adelante|en\s*luego|para\s*adelante|hacia\s*adelante)', post):
         result["fecha_desde"] = f"{anio}-01-01"
         return
 
-    # "{year} hacia atrás" / "{year} para atrás"
     if re.search(r'^\s*(hacia\s*atr[aá]s|para\s*atr[aá]s)', post):
         result["fecha_hasta"] = f"{anio}-12-31"
         return
 
-    # Por defecto: año exacto → rango cerrado
     result["fecha_desde"] = f"{anio}-01-01"
     result["fecha_hasta"] = f"{anio}-12-31"
 
@@ -108,13 +101,14 @@ def _detectar_tipo_desde_query(query: str, result: dict) -> None:
     elif re.search(r'\bfotos?\b|fotografías?\b', query, re.IGNORECASE):
         result["tipo"] = "fotografia"
 
-st.set_page_config(page_title="Búsqueda Semántica", layout="wide")
-st.title("🔍 Búsqueda Semántica")
+
+st.set_page_config(page_title="Búsqueda y Chat RAG", layout="wide")
+st.title("🔍 Búsqueda y Chat RAG")
 
 # ── Modo de búsqueda ──────────────────────────────────────────────────────
 modo = st.radio(
     "Modo de búsqueda",
-    ["Texto → Texto", "Texto → Imagen", "Imagen → Imagen", "Híbrida"],
+    ["Texto -> Texto", "Texto -> Imagen", "Imagen -> Imagen", "Híbrida"],
     horizontal=True,
     key="search_mode",
 )
@@ -123,13 +117,16 @@ modo = st.radio(
 query = ""
 imagen_subida = None
 
-if modo == "Imagen → Imagen":
+if modo == "Imagen -> Imagen":
     imagen_subida = st.file_uploader(
         "Sube una imagen para buscar visualmente similares",
         type=["jpg", "jpeg", "png", "webp"],
     )
 else:
-    query = st.text_input("Buscar", placeholder="Ej: obras de Gabriel García Márquez sobre realismo mágico...")
+    query = st.text_input(
+        "Buscar",
+        placeholder="Ej: obras de Gabriel García Márquez sobre realismo mágico...",
+    )
 
 # ── Filtros colapsables ───────────────────────────────────────────────────
 with st.expander("Filtros avanzados", expanded=False):
@@ -151,8 +148,30 @@ with st.expander("Filtros avanzados", expanded=False):
     estrategias = ["", "fixed_size", "sentence_aware", "semantic"]
     filtro_estrategia = st.selectbox("Estrategia de chunking", estrategias)
 
+# ── Sidebar: chat controls y fuentes ─────────────────────────────────────
+with st.sidebar:
+    st.markdown("### Chat RAG")
+    if st.button("🗑 Limpiar conversación"):
+        clear_messages()
+        set_rag_context([], "", None)
+        st.rerun()
+
+    st.markdown("### Fuentes usadas en última respuesta")
+    rag_context = st.session_state.get("rag_context", [])
+    if rag_context:
+        for i, ctx in enumerate(rag_context, 1):
+            with st.expander(f"Fuente #{i}"):
+                st.markdown(f"**Recurso:** {ctx.get('recurso', '—')}")
+                st.markdown(f"**Score:** {ctx.get('score', 0):.3f}")
+                st.markdown(f"**Estrategia:** {ctx.get('estrategia', '—')}")
+                st.text(ctx.get("texto", "")[:200])
+    else:
+        st.info("No hay fuentes aún. Haz una consulta.")
+
 # ── Ejecución de búsqueda ─────────────────────────────────────────────────
-debemos_buscar = (modo == "Imagen → Imagen" and imagen_subida is not None) or (modo != "Imagen → Imagen" and query)
+debemos_buscar = (modo == "Imagen -> Imagen" and imagen_subida is not None) or (modo != "Imagen -> Imagen" and query)
+
+resultados = []
 
 if debemos_buscar:
     if query:
@@ -173,7 +192,6 @@ if debemos_buscar:
             filtros["fecha_desde"] = f"{anio_str}-01-01"
             filtros["fecha_hasta"] = f"{anio_str}-12-31"
 
-    # Detectar filtros automáticamente desde el texto de la consulta
     filtros = _auto_detectar_filtros(query, filtros)
 
     estrategia = filtro_estrategia or None
@@ -181,7 +199,7 @@ if debemos_buscar:
     with st.spinner("Buscando..."):
         try:
             with get_session() as session:
-                if modo == "Imagen → Imagen":
+                if modo == "Imagen -> Imagen":
                     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                         tmp.write(imagen_subida.read())
                         tmp_path = tmp.name
@@ -189,7 +207,7 @@ if debemos_buscar:
                     Path(tmp_path).unlink(missing_ok=True)
                     resultados_raw = buscar_imagenes_similares(session, vector_img, top_k=TOP_K)
 
-                elif modo == "Texto → Imagen":
+                elif modo == "Texto -> Imagen":
                     filtros_img = {k: v for k, v in filtros.items() if v}
                     if filtros_img:
                         vector_img = get_embedding_texto_clip(query)
@@ -229,7 +247,6 @@ if debemos_buscar:
                             session, vector, top_k=TOP_K, estrategia=estrategia,
                         )
 
-            # Uniformizar resultados para render_result_card
             resultados = []
             for r in resultados_raw:
                 card = dict(r)
@@ -259,3 +276,89 @@ if debemos_buscar:
                         render_result_card(resultados[idx])
     else:
         st.info("No se encontraron resultados. Intenta modificar la consulta o los filtros.")
+
+# ── SEPARADOR ─────────────────────────────────────────────────────────────
+st.markdown("---")
+
+# ── CHAT RAG ──────────────────────────────────────────────────────────────
+st.subheader("💬 Consulta con IA")
+
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+if prompt := st.chat_input("Escribe tu pregunta sobre la biblioteca..."):
+    add_message("user", prompt)
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Consultando la biblioteca..."):
+            try:
+                estrategia_val = filtro_estrategia if filtro_estrategia else None
+
+                filtros_rag: dict = {}
+                if filtro_tipo:
+                    filtros_rag["tipo"] = filtro_tipo
+                if filtro_idioma:
+                    filtros_rag["idioma"] = filtro_idioma
+                if filtro_anio > 0:
+                    anio_str = f"{filtro_anio}"
+                    if filtro_fecha_modo == "Antes de":
+                        filtros_rag["fecha_hasta"] = f"{anio_str}-12-31"
+                    elif filtro_fecha_modo == "Después de":
+                        filtros_rag["fecha_desde"] = f"{anio_str}-01-01"
+                    else:
+                        filtros_rag["fecha_desde"] = f"{anio_str}-01-01"
+                        filtros_rag["fecha_hasta"] = f"{anio_str}-12-31"
+
+                filtros_rag = _auto_detectar_filtros(prompt, filtros_rag)
+
+                with get_session() as session:
+                    resultado = run_rag(
+                        session=session,
+                        usuario_id=get_usuario_id(),
+                        pregunta=prompt,
+                        top_k=TOP_K,
+                        filtros=filtros_rag or None,
+                        estrategia=estrategia_val,
+                        evaluar=False,
+                    )
+
+                respuesta = resultado["respuesta"]
+                contexto = resultado["contexto"]
+                consulta_id = resultado["consulta_id"]
+
+                set_rag_context(contexto, respuesta, consulta_id)
+                st.markdown(respuesta)
+
+                if contexto:
+                    with st.expander(f"📚 Fuentes utilizadas ({len(contexto)} fragmentos)"):
+                        for i, ctx in enumerate(contexto, 1):
+                            st.markdown(
+                                f"[{i}] **{ctx.get('recurso', '—')}** "
+                                f"(score: {ctx.get('score', 0):.3f}, "
+                                f"estrategia: {ctx.get('estrategia', '—')})"
+                            )
+                            st.text(ctx.get("texto", "")[:150] + ("…" if len(ctx.get("texto", "")) > 150 else ""))
+
+                if st.button("📊 Evaluar esta respuesta", key=f"eval_{consulta_id}"):
+                    with st.spinner("Calculando métricas RAGAS..."):
+                        contextos_texto = [c["texto"] for c in contexto]
+                        metricas = calcular_metricas_ragas(
+                            pregunta=prompt,
+                            respuesta=respuesta,
+                            contextos=contextos_texto,
+                        )
+                    col_m1, col_m2, col_m3 = st.columns(3)
+                    col_m1.metric("Faithfulness", f"{metricas.get('faithfulness', 0):.2%}")
+                    col_m2.metric("Answer Relevancy", f"{metricas.get('answer_relevancy', 0):.2%}")
+                    col_m3.metric("Context Recall", f"{metricas.get('context_recall', 0):.2%}")
+                    st.caption(f"Motor de evaluación: {metricas.get('motor', 'N/A')}")
+
+                add_message("assistant", respuesta)
+
+            except Exception as exc:
+                error_msg = f"Error al generar respuesta: {exc}"
+                st.error(error_msg)
+                add_message("assistant", error_msg)
