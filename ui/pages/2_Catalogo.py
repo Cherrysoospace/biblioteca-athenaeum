@@ -26,7 +26,7 @@ with st.container(border=True):
         tipos = ["", "libro", "articulo", "revista", "imagen", "mapa", "tesis"]
         f_tipo = st.selectbox("Tipo", tipos, key="cat_tipo")
     with col2:
-        idiomas = ["", "es", "en", "pt", "fr"]
+        idiomas = ["", "Español", "English", "Français", "Português", "Deutsch", "Chinese"]
         f_idioma = st.selectbox("Idioma", idiomas, key="cat_idioma")
     with col3:
         f_anio_desde = st.number_input("Año desde", min_value=0, max_value=2030, value=0, step=1, key="cat_anio_desde")

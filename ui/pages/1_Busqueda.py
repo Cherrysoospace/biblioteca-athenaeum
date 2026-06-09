@@ -135,7 +135,7 @@ with st.expander("Filtros avanzados", expanded=False):
         tipos_disponibles = ["", "libro", "articulo", "revista", "imagen", "mapa", "tesis"]
         filtro_tipo = st.selectbox("Tipo de recurso", tipos_disponibles)
     with col2:
-        idiomas = ["", "español", "inglés", "portugués", "francés"]
+        idiomas = ["", "Español", "English", "Français", "Português", "Deutsch", "Chinese"]
         filtro_idioma = st.selectbox("Idioma", idiomas)
     with col3:
         filtro_fecha_modo = st.selectbox(
