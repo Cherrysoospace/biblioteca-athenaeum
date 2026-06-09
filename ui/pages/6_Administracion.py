@@ -35,29 +35,170 @@ tab_ingest, tab_estado, tab_config = st.tabs([
 # TAB 1: Ingesta
 # ────────────────────────────────────────────────────────────────────────
 with tab_ingest:
-    st.subheader("Ingestar nuevo recurso")
+    st.subheader("Nuevo recurso")
 
-    uploaded_file = st.file_uploader(
-        "Selecciona un archivo (PDF, imagen, etc.)",
-        type=["pdf", "png", "jpg", "jpeg", "txt"],
-    )
+    with st.form("nuevo_recurso_form"):
+        col_img, col_fields = st.columns([1, 2])
 
-    if uploaded_file is not None:
-        file_bytes = uploaded_file.getvalue()
-        file_size_kb = len(file_bytes) / 1024
-        st.write(f"Archivo: **{uploaded_file.name}** ({file_size_kb:.1f} KB)")
+        with col_img:
+            uploaded_file = st.file_uploader(
+                "Imagen del recurso",
+                type=["png", "jpg", "jpeg"],
+                key="admin_img_upload",
+            )
+            if uploaded_file is not None:
+                st.image(uploaded_file, width=250)
 
-        # Preview del contenido
-        if uploaded_file.type and uploaded_file.type.startswith("image"):
-            st.image(uploaded_file, width=300)
-        elif uploaded_file.type == "text/plain":
-            try:
-                preview = uploaded_file.read(500).decode("utf-8", errors="replace")
-                st.text_area("Preview", preview, height=150)
-            except Exception:
-                pass
+        with col_fields:
+            titulo = st.text_input("Título *", placeholder="Ej: Cien años de soledad")
+            tipo = st.selectbox(
+                "Tipo *",
+                ["libro", "articulo", "revista", "video", "mapa", "fotografia", "otro"],
+                index=0,
+            )
+            descripcion = st.text_area(
+                "Descripción",
+                placeholder="Breve descripción del contenido del recurso...",
+            )
+            col_f1, col_f2, col_f3 = st.columns(3)
+            with col_f1:
+                fecha_pub = st.date_input("Fecha de publicación", value=None)
+            with col_f2:
+                idioma = st.text_input("Idioma", placeholder="es")
+            with col_f3:
+                licencia = st.text_input("Licencia", placeholder="CC BY-SA 4.0")
 
-    # ── Selección de estrategia ───────────────────────────────────────────
+            autor_nombre = st.text_input(
+                "Autor (opcional)",
+                placeholder="Nombre del autor (se creará si no existe)",
+            )
+
+            genero_nombre = st.text_input(
+                "Género (opcional)",
+                placeholder="Ej: Novela, Poesía, Ciencia Ficción (se creará si no existe)",
+            )
+
+        st.markdown("---")
+        col_submit, _ = st.columns([1, 3])
+        with col_submit:
+            submitted = st.form_submit_button("📥 Crear recurso e ingestar", type="primary")
+
+    if submitted:
+        if not titulo.strip():
+            st.error("El título es obligatorio.")
+        elif uploaded_file is None:
+            st.error("Debes subir una imagen para el recurso.")
+        else:
+            with st.status("Creando recurso e ingestando...", expanded=True) as status:
+                try:
+                    from models.recursos import Autor, RecursoAutor, Genero, RecursoGenero
+
+                    media_dir = Path(__file__).resolve().parent.parent.parent / "data" / "media"
+                    media_dir.mkdir(parents=True, exist_ok=True)
+
+                    # 1. Guardar imagen
+                    img_ext = Path(uploaded_file.name).suffix
+                    img_filename = f"recurso_{titulo.lower().replace(' ', '_')[:50]}{img_ext}"
+                    img_path = media_dir / img_filename
+                    with open(img_path, "wb") as f:
+                        f.write(uploaded_file.getvalue())
+                    ruta_relativa = f"data/media/{img_filename}"
+                    status.write(f"✅ Imagen guardada en {ruta_relativa}")
+
+                    with get_session() as session:
+                        # 2. Crear recurso
+                        recurso = Recurso(
+                            titulo=titulo.strip(),
+                            tipo=tipo,
+                            descripcion=descripcion.strip() if descripcion else None,
+                            fecha_publicacion=fecha_pub if fecha_pub else None,
+                            idioma=idioma.strip() if idioma else None,
+                            licencia=licencia.strip() if licencia else None,
+                        )
+                        session.add(recurso)
+                        session.flush()
+                        status.write(f"✅ Recurso creado (ID {recurso.id})")
+
+                        # 3. Crear ImagenRecurso
+                        img_record = ImagenRecurso(
+                            recurso_id=recurso.id,
+                            ruta_archivo=ruta_relativa,
+                            tipo_imagen="portada",
+                            descripcion=f"Imagen de {titulo.strip()}",
+                        )
+                        session.add(img_record)
+                        session.flush()
+                        status.write(f"✅ Imagen asociada (ID {img_record.id})")
+
+                        # 4. Autor opcional
+                        if autor_nombre and autor_nombre.strip():
+                            autor = session.execute(
+                                select(Autor).where(Autor.nombre == autor_nombre.strip())
+                            ).scalar_one_or_none()
+                            if autor is None:
+                                autor = Autor(
+                                    nombre=autor_nombre.strip(),
+                                    tipo="persona",
+                                )
+                                session.add(autor)
+                                session.flush()
+                                status.write(f"✅ Autor creado (ID {autor.id})")
+                            else:
+                                status.write(f"✅ Autor existente (ID {autor.id})")
+
+                            vinculo = RecursoAutor(recurso_id=recurso.id, autor_id=autor.id)
+                            session.add(vinculo)
+                            session.flush()
+
+                        # 5. Género opcional
+                        if genero_nombre and genero_nombre.strip():
+                            genero = session.execute(
+                                select(Genero).where(Genero.nombre == genero_nombre.strip())
+                            ).scalar_one_or_none()
+                            if genero is None:
+                                genero = Genero(nombre=genero_nombre.strip())
+                                session.add(genero)
+                                session.flush()
+                                status.write(f"✅ Género creado (ID {genero.id})")
+                            else:
+                                status.write(f"✅ Género existente (ID {genero.id})")
+
+                            vinculo_g = RecursoGenero(recurso_id=recurso.id, genero_id=genero.id)
+                            session.add(vinculo_g)
+                            session.flush()
+
+                        # 6. Estrategias de chunking
+                        estrategias = ["fixed_size", "sentence_aware", "semantic"]
+                        vectorizar_imagenes = True
+
+                        # 7. Ingestar (vectorizar)
+                        stats = ingest_recurso(
+                            session=session,
+                            recurso_id=recurso.id,
+                            estrategias=estrategias,
+                            vectorizar_imagenes=vectorizar_imagenes,
+                        )
+                        status.write(f"✅ Chunks generados: {stats['chunks_total']}")
+                        status.write(f"✅ Embeddings texto: {stats['embeddings_texto']}")
+                        status.write(f"✅ Embeddings imagen: {stats['embeddings_imagen']}")
+                        if stats.get("errores"):
+                            for err in stats["errores"]:
+                                status.write(f"⚠ {err}")
+
+                        status.update(label="Recurso creado e ingestado", state="complete")
+                        st.success(f"Recurso «{titulo.strip()}» (ID {recurso.id}) creado y vectorizado exitosamente.")
+                        st.balloons()
+
+                except Exception as exc:
+                    status.update(label="Error", state="error")
+                    st.error(f"Error: {exc}")
+                    import traceback
+                    st.code(traceback.format_exc())
+
+    # ── Ingestar un recurso existente por ID ──────────────────────────────
+    st.markdown("---")
+    st.markdown("#### Re-ingestar recurso existente por ID")
+
     estrategias_seleccionadas = st.multiselect(
         "Estrategias de chunking",
         ["fixed_size", "sentence_aware", "semantic"],
@@ -67,18 +208,14 @@ with tab_ingest:
 
     vectorizar_imagenes = st.checkbox("Vectorizar imágenes asociadas", value=True, key="admin_vec_img")
 
-    # ── Ingestar un recurso existente por ID ──────────────────────────────
-    st.markdown("---")
-    st.markdown("#### Ingestar recurso por ID")
-
     col_id, col_btn = st.columns([3, 1])
     with col_id:
         recurso_id = st.number_input("ID del recurso", min_value=1, value=1, step=1, key="admin_recurso_id")
     with col_btn:
-        ingest_click = st.button("▶ Ingestar", type="primary")
+        ingest_click = st.button("▶ Re-ingestar", type="primary")
 
     if ingest_click:
-        with st.status(f"Ingestando recurso ID {recurso_id}...", expanded=True) as status:
+        with st.status(f"Re-ingestando recurso ID {recurso_id}...", expanded=True) as status:
             try:
                 with get_session() as session:
                     stats = ingest_recurso(
@@ -94,7 +231,7 @@ with tab_ingest:
                     for err in stats["errores"]:
                         status.write(f"⚠ {err}")
                 status.update(label="Ingesta completada", state="complete")
-                st.success(f"Recurso {recurso_id} ingestado exitosamente.")
+                st.success(f"Recurso {recurso_id} re-ingestado exitosamente.")
             except Exception as exc:
                 status.update(label="Error en ingesta", state="error")
                 st.error(f"Error: {exc}")
