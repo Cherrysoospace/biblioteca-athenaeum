@@ -83,6 +83,9 @@ def cmd_query(args):
         )
     print("\n=== RESPUESTA RAG ===")
     print(resultado["respuesta"])
+    if resultado.get("sql_ejecutado"):
+        print("\n--- SQL ejecutado ---")
+        print(resultado["sql_ejecutado"])
     print("\n--- Contexto recuperado ---")
     for i, chunk in enumerate(resultado["contexto"], 1):
         print(f"[{i}] (score={chunk['score']:.4f}) {chunk['texto'][:120]}...")

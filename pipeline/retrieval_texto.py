@@ -14,13 +14,36 @@ import logging
 from typing import Optional
 
 from sqlalchemy.orm import Session
-from sqlalchemy import text, select, and_
+from sqlalchemy import text
 
 from models.embeddings_texto import EmbeddingTexto
 from models.recursos import Recurso
-from core.config import TOP_K, EMBEDDING_DIM_TEXTO
+from core.config import TOP_K
 
 logger = logging.getLogger(__name__)
+
+
+class ResultadoBusqueda(list):
+    """Lista de dicts que además lleva el SQL ejecutado en .sql"""
+    def __new__(cls, iterable=(), sql=None):
+        obj = super().__new__(cls, iterable)
+        obj.sql = sql
+        return obj
+
+
+def _aplicar_params(sql_str: str, params: dict) -> str:
+    """Reemplaza :param por sus valores literales para mostrar el SQL completo."""
+    # Ordenar por longitud descendente para evitar reemplazos parciales
+    result = sql_str
+    for k in sorted(params.keys(), key=len, reverse=True):
+        v = params[k]
+        if isinstance(v, str):
+            result = result.replace(f":{k}", f"'{v}'")
+        elif v is None:
+            result = result.replace(f":{k}", "NULL")
+        else:
+            result = result.replace(f":{k}", str(v))
+    return result
 
 
 # ── Búsqueda vectorial pura ───────────────────────────────────────────────────
@@ -30,23 +53,11 @@ def buscar_chunks_similares(
     vector_consulta: list[float],
     top_k: int = TOP_K,
     estrategia: Optional[str] = None,
-) -> list[dict]:
+) -> ResultadoBusqueda:
     """
     Recupera los `top_k` chunks de texto más similares al vector de consulta
     usando distancia coseno (pgvector operator <=>).
-
-    Args:
-        session: sesión SQLAlchemy.
-        vector_consulta: embedding de la pregunta (384 dims).
-        top_k: número de resultados a retornar.
-        estrategia: si se especifica, filtra por estrategia_chunking.
-
-    Returns:
-        Lista de dicts con keys: id, recurso_id, chunk_id, chunk_texto,
-        estrategia_chunking, score, titulo_recurso.
     """
-    # Construir la consulta SQL con pgvector
-    # La función 1 - (vec <=> query) convierte distancia coseno a similitud
     vec_str = _vector_to_sql(vector_consulta)
 
     params: dict = {"top_k": top_k}
@@ -55,7 +66,7 @@ def buscar_chunks_similares(
         where_estrategia = "AND et.estrategia_chunking = :estrategia"
         params["estrategia"] = estrategia
 
-    sql = text(f"""
+    sql_str = f"""
         SELECT
             et.id,
             et.recurso_id,
@@ -69,10 +80,12 @@ def buscar_chunks_similares(
         WHERE 1=1 {where_estrategia}
         ORDER BY et.vector_texto_384 <=> '{vec_str}'::vector
         LIMIT :top_k
-    """)
+    """
 
+    sql_ejecutado = _aplicar_params(sql_str, params)
+    sql = text(sql_str)
     rows = session.execute(sql, params).mappings().all()
-    return [dict(row) for row in rows]
+    return ResultadoBusqueda((dict(row) for row in rows), sql=sql_ejecutado)
 
 
 # ── Búsqueda híbrida (SQL + vectorial) ───────────────────────────────────────
@@ -83,7 +96,7 @@ def buscar_hibrido_texto(
     top_k: int = TOP_K,
     filtros: Optional[dict] = None,
     estrategia: Optional[str] = None,
-) -> list[dict]:
+) -> ResultadoBusqueda:
     """
     Búsqueda híbrida: aplica filtros relacionales sobre Recursos y luego
     rankea los chunks resultantes por similitud vectorial.
@@ -96,12 +109,11 @@ def buscar_hibrido_texto(
         fecha_hasta     (str)   — fecha de publicación máxima (YYYY-MM-DD)
 
     Returns:
-        Lista de dicts (misma estructura que buscar_chunks_similares).
+        ResultadoBusqueda: lista de dicts con .sql
     """
     filtros = filtros or {}
     vec_str = _vector_to_sql(vector_consulta)
 
-    # Condiciones SQL adicionales
     condiciones = ["1=1"]
     params: dict = {"top_k": top_k}
 
@@ -114,7 +126,6 @@ def buscar_hibrido_texto(
         params["tipo"] = filtros["tipo"]
 
     if filtros.get("calificacion_min"):
-        # Subquery: promedio de calificación de reseñas del recurso
         condiciones.append("""
             (SELECT AVG(calificacion) FROM reseñas rz WHERE rz.recurso_id = r.id)
             >= :calificacion_min
@@ -135,7 +146,7 @@ def buscar_hibrido_texto(
 
     where_clause = " AND ".join(condiciones)
 
-    sql = text(f"""
+    sql_str = f"""
         SELECT
             et.id,
             et.recurso_id,
@@ -151,10 +162,12 @@ def buscar_hibrido_texto(
         WHERE {where_clause}
         ORDER BY et.vector_texto_384 <=> '{vec_str}'::vector
         LIMIT :top_k
-    """)
+    """
 
+    sql_ejecutado = _aplicar_params(sql_str, params)
+    sql = text(sql_str)
     rows = session.execute(sql, params).mappings().all()
-    return [dict(row) for row in rows]
+    return ResultadoBusqueda((dict(row) for row in rows), sql=sql_ejecutado)
 
 
 # ── Helpers internos ──────────────────────────────────────────────────────────

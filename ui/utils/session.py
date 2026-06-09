@@ -22,6 +22,7 @@ def init_session() -> None:
         "rag_answer": "",
         "rag_consulta_id": None,
         "experiment_running": False,
+        "_sql_ejecutado": None,
     }
     for key, value in _defaults.items():
         if key not in st.session_state:

@@ -20,7 +20,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from core.config import TOP_K
-from pipeline.retrieval_texto import buscar_hibrido_texto, _vector_to_sql
+from pipeline.retrieval_texto import (
+    buscar_hibrido_texto, _vector_to_sql, ResultadoBusqueda, _aplicar_params,
+)
 from pipeline.retrieval_imagen import buscar_imagenes_hibrido
 from pipeline.embeddings_minilm import get_embedding
 
@@ -35,10 +37,7 @@ def buscar_por_tema_semantico(
     top_k: int = TOP_K,
     estrategia: Optional[str] = None,
 ) -> list[dict]:
-    """
-    Recupera chunks de texto semánticamente relacionados con la pregunta,
-    sin filtros relacionales adicionales.
-    """
+    """Recupera chunks de texto semánticamente relacionados con la pregunta."""
     vector = get_embedding(pregunta)
     return buscar_hibrido_texto(session, vector, top_k=top_k, estrategia=estrategia)
 
@@ -52,16 +51,9 @@ def buscar_articulos_por_tema_y_fecha(
     fecha_hasta: Optional[str] = None,
     top_k: int = TOP_K,
 ) -> list[dict]:
-    """
-    Combina: tipo='articulo', rango de fechas de publicación y similitud semántica.
-    Ejemplo: Q2 — artículos sobre IA en medicina publicados entre 2018 y 2024.
-    """
+    """Combina: tipo='articulo', rango de fechas y similitud semántica."""
     vector = get_embedding(pregunta)
-    filtros = {
-        "tipo": "articulo",
-        "fecha_desde": fecha_desde,
-        "fecha_hasta": fecha_hasta,
-    }
+    filtros = {"tipo": "articulo", "fecha_desde": fecha_desde, "fecha_hasta": fecha_hasta}
     return buscar_hibrido_texto(session, vector, top_k=top_k, filtros=filtros)
 
 
@@ -71,19 +63,12 @@ def buscar_por_resenas_semanticas(
     session: Session,
     pregunta: str,
     top_k: int = TOP_K,
-) -> list[dict]:
-    """
-    Recupera recursos a partir de la similitud semántica sobre los textos de
-    reseñas de usuarios. Los chunks de Embeddings_Texto que provienen de reseñas
-    se generan durante la ingesta si se incluye el campo Reseñas.texto.
-
-    Dado que la ingesta actual vectoriza descripcion + titulo + biografías,
-    esta consulta filtra chunks cuyos textos coinciden con lenguaje de reseña.
-    """
+) -> ResultadoBusqueda:
+    """Recupera recursos a partir de la similitud semántica sobre reseñas."""
     vector = get_embedding(pregunta)
     vec_str = _vector_to_sql(vector)
 
-    sql = text(f"""
+    sql_str = f"""
         SELECT
             et.id,
             et.recurso_id,
@@ -96,9 +81,11 @@ def buscar_por_resenas_semanticas(
         JOIN recursos r ON r.id = et.recurso_id
         ORDER BY et.vector_texto_384 <=> '{vec_str}'::vector
         LIMIT :top_k
-    """)
+    """
+    sql_ejecutado = _aplicar_params(sql_str, {"top_k": top_k})
+    sql = text(sql_str)
     rows = session.execute(sql, {"top_k": top_k}).mappings().all()
-    return [dict(row) for row in rows]
+    return ResultadoBusqueda((dict(row) for row in rows), sql=sql_ejecutado)
 
 
 # ── Q5: Libros en español con calificación alta y tema existencialista ────────
@@ -110,16 +97,9 @@ def buscar_libros_por_idioma_y_tema(
     calificacion_min: float = 4.0,
     top_k: int = TOP_K,
 ) -> list[dict]:
-    """
-    Combina: tipo='libro', idioma, calificación promedio mínima y semántica.
-    Ejemplo: Q5 — libros en español con calificación > 4 sobre filosofía existencialista.
-    """
+    """Combina: tipo='libro', idioma, calificación mínima y semántica."""
     vector = get_embedding(pregunta)
-    filtros = {
-        "tipo": "libro",
-        "idioma": idioma,
-        "calificacion_min": calificacion_min,
-    }
+    filtros = {"tipo": "libro", "idioma": idioma, "calificacion_min": calificacion_min}
     return buscar_hibrido_texto(session, vector, top_k=top_k, filtros=filtros)
 
 
@@ -132,17 +112,12 @@ def buscar_imagenes_historicas(
     fecha_hasta: Optional[str] = None,
     top_k: int = TOP_K,
 ) -> list[dict]:
-    """
-    Búsqueda multimodal: imágenes visualmente similares filtradas por tipo y fecha.
-    Ejemplo: Q8 — mapas o fotografías de archivo sobre la Revolución Francesa
-    anteriores a 1950.
-    """
+    """Búsqueda multimodal: imágenes visualmente similares filtradas."""
     filtros = {}
     if tipo_imagen:
         filtros["tipo_imagen"] = tipo_imagen
     if fecha_hasta:
         filtros["fecha_hasta"] = fecha_hasta
-
     return buscar_imagenes_hibrido(session, vector_imagen, top_k=top_k, filtros=filtros)
 
 
@@ -157,9 +132,6 @@ def buscar_autor_y_similares(
     """
     Consulta factual (SQL) para encontrar el autor de un recurso por título,
     seguida de búsqueda semántica para recursos similares.
-
-    Returns:
-        dict con keys: autores (list[dict]), similares (list[dict])
     """
     # 1. Consulta SQL exacta: autor del recurso
     sql_autor = text("""
@@ -191,10 +163,7 @@ def buscar_revistas_por_tema(
     pregunta: str,
     top_k: int = TOP_K,
 ) -> list[dict]:
-    """
-    Filtra tipo='revista' y recupera las más semánticamente relevantes al tema.
-    Ejemplo: Q10 — revistas que han publicado sobre cambio climático.
-    """
+    """Filtra tipo='revista' y recupera las más semánticamente relevantes."""
     vector = get_embedding(pregunta)
     return buscar_hibrido_texto(
         session, vector, top_k=top_k, filtros={"tipo": "revista"}
@@ -215,22 +184,15 @@ def consulta_hibrida(
     """
     Punto de entrada genérico para consultas híbridas.
 
-    Args:
-        pregunta: texto de la consulta del usuario.
-        filtros: dict con idioma, tipo, calificacion_min, fecha_desde, fecha_hasta.
-        top_k: resultados a recuperar de texto e imagen respectivamente.
-        estrategia: filtrar embeddings de texto por estrategia de chunking.
-        incluir_imagenes: si True, incluye recuperación de imágenes.
-        vector_imagen: embedding CLIP de una imagen de consulta (opcional).
-
     Returns:
-        dict con keys: chunks_texto (list[dict]), imagenes (list[dict])
+        dict con keys: chunks_texto, imagenes, sql_ejecutado
     """
     vector_texto = get_embedding(pregunta)
     chunks = buscar_hibrido_texto(
         session, vector_texto,
         top_k=top_k, filtros=filtros, estrategia=estrategia
     )
+    sql_ejecutado = chunks.sql if isinstance(chunks, ResultadoBusqueda) else None
 
     imagenes = []
     if incluir_imagenes and vector_imagen:
@@ -243,4 +205,4 @@ def consulta_hibrida(
             session, vector_imagen, top_k=top_k, filtros=filtros_img or None
         )
 
-    return {"chunks_texto": chunks, "imagenes": imagenes}
+    return {"chunks_texto": chunks, "imagenes": imagenes, "sql_ejecutado": sql_ejecutado}

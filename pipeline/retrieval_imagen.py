@@ -17,7 +17,9 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from core.config import TOP_K, EMBEDDING_DIM_IMAGEN
+from core.config import TOP_K
+
+from pipeline.retrieval_texto import ResultadoBusqueda, _aplicar_params
 
 logger = logging.getLogger(__name__)
 
@@ -32,22 +34,16 @@ def buscar_imagenes_similares(
     session: Session,
     vector_imagen: list[float],
     top_k: int = TOP_K,
-) -> list[dict]:
+) -> ResultadoBusqueda:
     """
     Recupera las `top_k` imágenes más similares visualmente a un embedding CLIP.
 
-    Args:
-        session: sesión SQLAlchemy.
-        vector_imagen: embedding CLIP de la imagen consulta (512 dims).
-        top_k: número de resultados.
-
     Returns:
-        Lista de dicts con: id (embedding), imagen_id, recurso_id, ruta_archivo,
-        tipo_imagen, descripcion, titulo_recurso, score.
+        ResultadoBusqueda: lista de dicts con .sql
     """
     vec_str = _vector_to_sql(vector_imagen)
 
-    sql = text(f"""
+    sql_str = f"""
         SELECT
             ei.id              AS embedding_id,
             ei.imagen_id,
@@ -62,10 +58,13 @@ def buscar_imagenes_similares(
         JOIN recursos r           ON r.id  = ir.recurso_id
         ORDER BY ei.vector_embedding <=> '{vec_str}'::vector
         LIMIT :top_k
-    """)
+    """
 
-    rows = session.execute(sql, {"top_k": top_k}).mappings().all()
-    return [dict(row) for row in rows]
+    params = {"top_k": top_k}
+    sql_ejecutado = _aplicar_params(sql_str, params)
+    sql = text(sql_str)
+    rows = session.execute(sql, params).mappings().all()
+    return ResultadoBusqueda((dict(row) for row in rows), sql=sql_ejecutado)
 
 
 # ── Modalidad 2: texto → imagen ───────────────────────────────────────────────
@@ -74,18 +73,10 @@ def buscar_imagenes_por_texto(
     session: Session,
     texto_consulta: str,
     top_k: int = TOP_K,
-) -> list[dict]:
+) -> ResultadoBusqueda:
     """
     Recupera imágenes cuyo embedding CLIP es más cercano a la descripción textual.
     Usa el encoder de texto de CLIP (vector de 512 dims) para cruzar modalidades.
-
-    Args:
-        session: sesión SQLAlchemy.
-        texto_consulta: descripción textual de la imagen buscada.
-        top_k: número de resultados.
-
-    Returns:
-        Misma estructura que buscar_imagenes_similares.
     """
     from pipeline.embeddings_clip import get_embedding_texto_clip
     vector_texto = get_embedding_texto_clip(texto_consulta)
@@ -99,7 +90,7 @@ def buscar_imagenes_hibrido(
     vector_imagen: list[float],
     top_k: int = TOP_K,
     filtros: Optional[dict] = None,
-) -> list[dict]:
+) -> ResultadoBusqueda:
     """
     Búsqueda híbrida: combina filtros relacionales sobre imágenes y recursos
     con similitud coseno sobre Embeddings_Imagen.
@@ -113,7 +104,7 @@ def buscar_imagenes_hibrido(
         recurso_id    (int)  — limitar a imágenes de un recurso específico
 
     Returns:
-        Lista de dicts (misma estructura que buscar_imagenes_similares).
+        ResultadoBusqueda: lista de dicts con .sql
     """
     filtros = filtros or {}
     vec_str = _vector_to_sql(vector_imagen)
@@ -147,7 +138,7 @@ def buscar_imagenes_hibrido(
 
     where_clause = " AND ".join(condiciones)
 
-    sql = text(f"""
+    sql_str = f"""
         SELECT
             ei.id              AS embedding_id,
             ei.imagen_id,
@@ -166,10 +157,12 @@ def buscar_imagenes_hibrido(
         WHERE {where_clause}
         ORDER BY ei.vector_embedding <=> '{vec_str}'::vector
         LIMIT :top_k
-    """)
+    """
 
+    sql_ejecutado = _aplicar_params(sql_str, params)
+    sql = text(sql_str)
     rows = session.execute(sql, params).mappings().all()
-    return [dict(row) for row in rows]
+    return ResultadoBusqueda((dict(row) for row in rows), sql=sql_ejecutado)
 
 
 # ── Imagen → texto cruzado ────────────────────────────────────────────────────
@@ -182,13 +175,6 @@ def buscar_textos_por_imagen(
     """
     Dado el embedding CLIP de una imagen (512 dims), recupera los chunks de texto
     semánticamente relacionados en Embeddings_Texto.
-
-    Nota: requiere que los embeddings de imagen y texto estén en el mismo espacio
-    (CLIP es multimodal por diseño). El vector de imagen se proyecta sobre
-    los chunks de texto truncando a 384 dims o usando una tabla bridge.
-
-    Implementación actual: usa el texto de descripción de las imágenes más
-    similares como puente hacia Embeddings_Texto.
     """
     # Paso 1: encontrar imágenes similares
     imagenes = buscar_imagenes_similares(session, vector_imagen, top_k=top_k * 2)
@@ -200,7 +186,6 @@ def buscar_textos_por_imagen(
     recurso_ids = list({img["recurso_id"] for img in imagenes})
 
     from pipeline.retrieval_texto import _vector_to_sql as _vec2sql
-    from core.config import EMBEDDING_DIM_TEXTO
 
     # Consulta: chunks de esos recursos ordenados por similitud con la descripción
     # de la primera imagen (puente texto→texto)
@@ -216,7 +201,7 @@ def buscar_textos_por_imagen(
     vec_str = _vec2sql(vec_texto)
 
     ids_str = ",".join(str(rid) for rid in recurso_ids)
-    sql = text(f"""
+    sql_str = f"""
         SELECT
             et.id,
             et.recurso_id,
@@ -230,7 +215,10 @@ def buscar_textos_por_imagen(
         WHERE et.recurso_id IN ({ids_str})
         ORDER BY et.vector_texto_384 <=> '{vec_str}'::vector
         LIMIT :top_k
-    """)
+    """
 
-    rows = session.execute(sql, {"top_k": top_k}).mappings().all()
-    return [dict(row) for row in rows]
+    params = {"top_k": top_k}
+    sql_ejecutado = _aplicar_params(sql_str, params)
+    sql = text(sql_str)
+    rows = session.execute(sql, params).mappings().all()
+    return ResultadoBusqueda((dict(row) for row in rows), sql=sql_ejecutado)

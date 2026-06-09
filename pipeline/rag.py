@@ -25,7 +25,7 @@ from core.config import (
 from models.consultas import Consulta, ResultadoConsulta, Evaluacion
 from models.embeddings_consulta import EmbeddingConsulta
 from pipeline.embeddings_minilm import get_embedding
-from pipeline.retrieval_texto import buscar_hibrido_texto
+from pipeline.retrieval_texto import buscar_hibrido_texto, ResultadoBusqueda
 from pipeline.evaluacion import calcular_metricas_ragas
 
 logger = logging.getLogger(__name__)
@@ -160,6 +160,7 @@ def run_rag(
         session, vector_pregunta,
         top_k=top_k, filtros=filtros, estrategia=estrategia
     )
+    sql_ejecutado = chunks.sql if isinstance(chunks, ResultadoBusqueda) else None
     logger.info("RAG — Recuperados %d chunks", len(chunks))
 
     # 3. Generar respuesta con el LLM
@@ -251,6 +252,7 @@ def run_rag(
             "respuesta": respuesta,
             "contexto": [],
             "metricas": None,
+            "sql_ejecutado": sql_ejecutado,
             "error": str(exc),
         }
 
@@ -268,4 +270,5 @@ def run_rag(
             for c in chunks
         ],
         "metricas": metricas,
+        "sql_ejecutado": sql_ejecutado,
     }

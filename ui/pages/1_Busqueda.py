@@ -15,7 +15,7 @@ import streamlit as st
 from core.database import get_session
 from core.config import TOP_K
 from pipeline.embeddings_minilm import get_embedding
-from pipeline.retrieval_texto import buscar_chunks_similares, buscar_hibrido_texto
+from pipeline.retrieval_texto import buscar_chunks_similares, buscar_hibrido_texto, ResultadoBusqueda
 from pipeline.retrieval_imagen import buscar_imagenes_por_texto, buscar_imagenes_similares, buscar_imagenes_hibrido
 from pipeline.embeddings_clip import get_embedding_texto_clip, get_embedding_imagen
 from pipeline.rag import run_rag
@@ -247,6 +247,11 @@ if debemos_buscar:
                             session, vector, top_k=TOP_K, estrategia=estrategia,
                         )
 
+            # Capturar SQL inmediatamente después de la búsqueda
+            sql_mostrar = getattr(resultados_raw, 'sql', None)
+            if sql_mostrar:
+                st.session_state["_sql_ejecutado"] = sql_mostrar
+
             resultados = []
             for r in resultados_raw:
                 card = dict(r)
@@ -276,6 +281,12 @@ if debemos_buscar:
                         render_result_card(resultados[idx])
     else:
         st.info("No se encontraron resultados. Intenta modificar la consulta o los filtros.")
+
+    # ── Mostrar SQL ejecutado ────────────────────────────────────────────
+    sql_mostrar = st.session_state.get("_sql_ejecutado")
+    if sql_mostrar:
+        with st.expander("🗄️ ---", expanded=False):
+            st.code(sql_mostrar, language="sql")
 
 # ── SEPARADOR ─────────────────────────────────────────────────────────────
 st.markdown("---")
@@ -341,6 +352,11 @@ if prompt := st.chat_input("Escribe tu pregunta sobre la biblioteca..."):
                                 f"estrategia: {ctx.get('estrategia', '—')})"
                             )
                             st.text(ctx.get("texto", "")[:150] + ("…" if len(ctx.get("texto", "")) > 150 else ""))
+
+                sql_rag = resultado.get("sql_ejecutado")
+                if sql_rag:
+                    with st.expander("🗄️ SQL ejecutado en esta consulta", expanded=False):
+                        st.code(sql_rag, language="sql")
 
                 if st.button("📊 Evaluar esta respuesta", key=f"eval_{consulta_id}"):
                     with st.spinner("Calculando métricas RAGAS..."):
