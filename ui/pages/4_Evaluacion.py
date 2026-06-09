@@ -1,4 +1,4 @@
-"""ui/pages/4_Evaluacion.py — Dashboard de métricas RAGAS con histórico y experimentos."""
+"""ui/pages/4_Evaluacion.py — Dashboard de métricas RAGAS con histórico."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ import streamlit as st
 from sqlalchemy import select, func as sa_func
 from core.database import get_session
 from models.consultas import Evaluacion, Consulta
-from pipeline.evaluacion import experimento_chunking
 
 st.set_page_config(page_title="Dashboard RAGAS", layout="wide")
 st.title("📊 Dashboard de Evaluación RAGAS")
@@ -31,6 +30,8 @@ def cargar_historial() -> pd.DataFrame:
                 Evaluacion.faithfulness,
                 Evaluacion.answer_relevancy,
                 Evaluacion.context_recall,
+                Evaluacion.context_precision,
+                Evaluacion.answer_correctness,
                 Evaluacion.fecha,
             )
             .join(Consulta, Consulta.id == Evaluacion.consulta_id)
@@ -43,9 +44,11 @@ def cargar_historial() -> pd.DataFrame:
             "id": r["id"],
             "consulta_id": r["consulta_id"],
             "pregunta": r["texto_pregunta"][:60] + "…" if len(r["texto_pregunta"]) > 60 else r["texto_pregunta"],
-            "faithfulness": float(r["faithfulness"]) if r["faithfulness"] else None,
-            "answer_relevancy": float(r["answer_relevancy"]) if r["answer_relevancy"] else None,
-            "context_recall": float(r["context_recall"]) if r["context_recall"] else None,
+            "faithfulness": float(r["faithfulness"]) if r["faithfulness"] is not None else None,
+            "answer_relevancy": float(r["answer_relevancy"]) if r["answer_relevancy"] is not None else None,
+            "context_recall": float(r["context_recall"]) if r["context_recall"] is not None else None,
+            "context_precision": float(r["context_precision"]) if r["context_precision"] is not None else None,
+            "answer_correctness": float(r["answer_correctness"]) if r["answer_correctness"] is not None else None,
             "fecha": str(r["fecha"]) if r["fecha"] else "",
         }
         for r in rows
@@ -57,102 +60,62 @@ df = cargar_historial()
 
 # ── Métricas agregadas ───────────────────────────────────────────────────
 if not df.empty:
-    prom_faith = df["faithfulness"].mean()
-    prom_relevancy = df["answer_relevancy"].mean()
-    prom_recall = df["context_recall"].mean()
-
-    col_m1, col_m2, col_m3 = st.columns(3)
-    col_m1.metric("Faithfulness promedio", f"{prom_faith:.2%}" if pd.notna(prom_faith) else "N/A")
-    col_m2.metric("Answer Relevancy promedio", f"{prom_relevancy:.2%}" if pd.notna(prom_relevancy) else "N/A")
-    col_m3.metric("Context Recall promedio", f"{prom_recall:.2%}" if pd.notna(prom_recall) else "N/A")
+    col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
+    col_m1.metric(
+        "Faithfulness",
+        f"{df['faithfulness'].mean():.2%}" if pd.notna(df['faithfulness'].mean()) else "N/A",
+    )
+    col_m2.metric(
+        "Answer Relevancy",
+        f"{df['answer_relevancy'].mean():.2%}" if pd.notna(df['answer_relevancy'].mean()) else "N/A",
+    )
+    col_m3.metric(
+        "Context Recall",
+        f"{df['context_recall'].mean():.2%}" if pd.notna(df['context_recall'].mean()) else "N/A",
+    )
+    col_m4.metric(
+        "Context Precision",
+        f"{df['context_precision'].mean():.2%}" if pd.notna(df['context_precision'].mean()) else "N/A",
+    )
+    col_m5.metric(
+        "Answer Correctness",
+        f"{df['answer_correctness'].mean():.2%}" if pd.notna(df['answer_correctness'].mean()) else "N/A",
+    )
 
     # ── Gráfico de evolución ──────────────────────────────────────────────
     st.subheader("Evolución de métricas")
-    df_chart = df.dropna(subset=["faithfulness", "answer_relevancy", "context_recall"]).copy()
+    cols_chart = [
+        c for c in
+        ["faithfulness", "answer_relevancy", "context_recall", "context_precision", "answer_correctness"]
+        if c in df.columns and df[c].notna().any()
+    ]
+    df_chart = df.dropna(subset=cols_chart).copy()
     if not df_chart.empty:
         df_chart["idx"] = range(len(df_chart))
-        st.line_chart(
-            df_chart.set_index("idx")[["faithfulness", "answer_relevancy", "context_recall"]],
-        )
+        st.line_chart(df_chart.set_index("idx")[cols_chart])
 
     # ── Tabla de histórico ────────────────────────────────────────────────
     st.subheader("Histórico de evaluaciones")
+    cols_display = [
+        c for c in
+        ["id", "pregunta", "faithfulness", "answer_relevancy", "context_recall",
+         "context_precision", "answer_correctness", "fecha"]
+        if c in df.columns
+    ]
+    col_config = {
+        "faithfulness": st.column_config.ProgressColumn("Faithfulness", format="%.2f", min_value=0, max_value=1),
+        "answer_relevancy": st.column_config.ProgressColumn("Answer Relevancy", format="%.2f", min_value=0, max_value=1),
+        "context_recall": st.column_config.ProgressColumn("Context Recall", format="%.2f", min_value=0, max_value=1),
+        "context_precision": st.column_config.ProgressColumn("Context Precision", format="%.2f", min_value=0, max_value=1),
+        "answer_correctness": st.column_config.ProgressColumn("Answer Correctness", format="%.2f", min_value=0, max_value=1),
+    }
     st.dataframe(
-        df[["id", "pregunta", "faithfulness", "answer_relevancy", "context_recall", "fecha"]],
+        df[cols_display],
         use_container_width=True,
         hide_index=True,
-        column_config={
-            "faithfulness": st.column_config.ProgressColumn("Faithfulness", format="%.2f", min_value=0, max_value=1),
-            "answer_relevancy": st.column_config.ProgressColumn("Answer Relevancy", format="%.2f", min_value=0, max_value=1),
-            "context_recall": st.column_config.ProgressColumn("Context Recall", format="%.2f", min_value=0, max_value=1),
-        },
+        column_config=col_config,
     )
 
     st.caption(f"Mostrando {len(df)} evaluaciones recientes")
 else:
     st.info("Aún no hay evaluaciones registradas. Realiza consultas desde el Chat RAG y evalúalas.")
-
-# ── Comparativa por estrategia ───────────────────────────────────────────
-st.markdown("---")
-st.subheader("Comparativa por estrategia de chunking")
-
-st.info(
-    "La comparativa por estrategia estará disponible cuando haya "
-    "evaluaciones de consultas con diferentes estrategias de chunking."
-)
-
-# ── Experimento completo ─────────────────────────────────────────────────
-st.markdown("---")
-st.subheader("🧪 Ejecutar experimento completo")
-
-col_e1, col_e2 = st.columns([3, 1])
-with col_e1:
-    st.markdown(
-        "Ejecuta las 10 consultas de prueba sobre las 3 estrategias de chunking "
-        "y almacena las métricas RAGAS."
-    )
-with col_e2:
-    ejecutar = st.button("▶ Ejecutar experimento", type="primary", disabled=st.session_state.get("experiment_running", False))
-
-if ejecutar:
-    st.session_state.experiment_running = True
-    consultas_prueba = [
-        {"pregunta": "¿Qué obras de Gabriel García Márquez hay en la biblioteca?"},
-        {"pregunta": "¿Qué recursos hay sobre literatura latinoamericana contemporánea?"},
-        {"pregunta": "¿Qué libros trata sobre la historia de Colombia en el siglo XIX?"},
-        {"pregunta": "¿Hay artículos sobre inteligencia artificial en español?"},
-        {"pregunta": "¿Qué recursos educativos están disponibles para ciencias naturales?"},
-        {"pregunta": "¿Qué autores mexicanos están en el catálogo?"},
-        {"pregunta": "¿Hay mapas históricos de América del Sur?"},
-        {"pregunta": "¿Qué recursos tiene la biblioteca sobre cambio climático?"},
-        {"pregunta": "¿Qué obras de ficción tienen calificación mayor a 4?"},
-        {"pregunta": "¿Qué autores argentinos están disponibles en portugués?"},
-    ]
-
-    progress_bar = st.progress(0, text="Iniciando experimento...")
-    status_text = st.status("Ejecutando...", expanded=False)
-
-    try:
-        with get_session() as session:
-            status_text.write("Iniciando experimento de chunking...")
-            resultados = experimento_chunking(
-                session=session,
-                usuario_id=1,
-                consultas=consultas_prueba,
-            )
-
-        for i, r in enumerate(resultados):
-            progress_bar.progress((i + 1) / len(resultados), text=f"Procesando consulta {i + 1}/{len(resultados)}")
-            status_text.write(f"{r.get('pregunta', '—')[:40]}... [{r.get('estrategia', '—')}] → OK")
-
-        progress_bar.progress(1.0, text="Experimento completado")
-        status_text.write("✅ Experimento finalizado exitosamente.")
-        st.success(f"Experimento completado: {len(resultados)} evaluaciones generadas.")
-        st.cache_data.clear()
-        st.rerun()
-
-    except Exception as exc:
-        st.error(f"Error durante el experimento: {exc}")
-        status_text.write(f"❌ Error: {exc}")
-
-    st.session_state.experiment_running = False

@@ -49,9 +49,11 @@ def buscar_chunks_similares(
     # La función 1 - (vec <=> query) convierte distancia coseno a similitud
     vec_str = _vector_to_sql(vector_consulta)
 
+    params: dict = {"top_k": top_k}
     where_estrategia = ""
     if estrategia:
-        where_estrategia = f"AND et.estrategia_chunking = '{estrategia}'"
+        where_estrategia = "AND et.estrategia_chunking = :estrategia"
+        params["estrategia"] = estrategia
 
     sql = text(f"""
         SELECT
@@ -69,7 +71,7 @@ def buscar_chunks_similares(
         LIMIT :top_k
     """)
 
-    rows = session.execute(sql, {"top_k": top_k}).mappings().all()
+    rows = session.execute(sql, params).mappings().all()
     return [dict(row) for row in rows]
 
 
@@ -127,9 +129,9 @@ def buscar_hibrido_texto(
         condiciones.append("r.fecha_publicacion <= :fecha_hasta")
         params["fecha_hasta"] = filtros["fecha_hasta"]
 
-    where_estrategia = ""
     if estrategia:
-        condiciones.append(f"et.estrategia_chunking = '{estrategia}'")
+        condiciones.append("et.estrategia_chunking = :estrategia")
+        params["estrategia"] = estrategia
 
     where_clause = " AND ".join(condiciones)
 

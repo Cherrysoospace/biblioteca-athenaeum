@@ -216,6 +216,8 @@ def run_rag(
                 faithfulness=round(metricas["faithfulness"], 4),
                 answer_relevancy=round(metricas["answer_relevancy"], 4),
                 context_recall=round(metricas.get("context_recall", 0.0), 4),
+                context_precision=round(metricas.get("context_precision", 0.0), 4),
+                answer_correctness=round(metricas.get("answer_correctness", 0.0), 4),
                 fecha=datetime.utcnow(),
             )
             session.add(evaluacion)

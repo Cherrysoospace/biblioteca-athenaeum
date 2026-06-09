@@ -234,8 +234,13 @@ def consulta_hibrida(
 
     imagenes = []
     if incluir_imagenes and vector_imagen:
+        filtros_img = {}
+        if filtros:
+            for k in ("tipo_imagen", "recurso_tipo", "idioma", "fecha_desde", "fecha_hasta", "recurso_id"):
+                if k in filtros:
+                    filtros_img[k] = filtros[k]
         imagenes = buscar_imagenes_hibrido(
-            session, vector_imagen, top_k=top_k, filtros=filtros
+            session, vector_imagen, top_k=top_k, filtros=filtros_img or None
         )
 
     return {"chunks_texto": chunks, "imagenes": imagenes}

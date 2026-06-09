@@ -16,7 +16,7 @@ from core.database import get_session
 from core.config import TOP_K
 from pipeline.embeddings_minilm import get_embedding
 from pipeline.retrieval_texto import buscar_chunks_similares, buscar_hibrido_texto
-from pipeline.retrieval_imagen import buscar_imagenes_por_texto, buscar_imagenes_similares
+from pipeline.retrieval_imagen import buscar_imagenes_por_texto, buscar_imagenes_similares, buscar_imagenes_hibrido
 from pipeline.embeddings_clip import get_embedding_texto_clip, get_embedding_imagen
 from ui.components.result_card import render_result_card
 from ui.utils.session import set_query, set_results
@@ -190,15 +190,33 @@ if debemos_buscar:
                     resultados_raw = buscar_imagenes_similares(session, vector_img, top_k=TOP_K)
 
                 elif modo == "Texto → Imagen":
-                    resultados_raw = buscar_imagenes_por_texto(session, query, top_k=TOP_K)
+                    filtros_img = {k: v for k, v in filtros.items() if v}
+                    if filtros_img:
+                        vector_img = get_embedding_texto_clip(query)
+                        resultados_raw = buscar_imagenes_hibrido(
+                            session, vector_img, top_k=TOP_K,
+                            filtros=filtros_img,
+                        )
+                    else:
+                        resultados_raw = buscar_imagenes_por_texto(session, query, top_k=TOP_K)
 
                 elif modo == "Híbrida":
                     vector = get_embedding(query)
-                    resultados_raw = buscar_hibrido_texto(
+                    textos = buscar_hibrido_texto(
                         session, vector, top_k=TOP_K,
                         filtros=filtros if any(filtros.values()) else None,
                         estrategia=estrategia,
                     )
+                    filtros_img = {k: v for k, v in filtros.items() if v and k in ("tipo_imagen", "recurso_tipo", "idioma", "fecha_desde", "fecha_hasta", "recurso_id")}
+                    if filtros_img:
+                        vector_img = get_embedding_texto_clip(query)
+                        imagenes = buscar_imagenes_hibrido(
+                            session, vector_img, top_k=TOP_K,
+                            filtros=filtros_img,
+                        )
+                        resultados_raw = textos + imagenes
+                    else:
+                        resultados_raw = textos
                 else:
                     vector = get_embedding(query)
                     if any(filtros.values()):

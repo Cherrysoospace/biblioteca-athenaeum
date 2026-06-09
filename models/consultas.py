@@ -100,6 +100,8 @@ class Evaluacion(Base):
     faithfulness: Mapped[Optional[float]] = mapped_column(Numeric(5, 4))
     answer_relevancy: Mapped[Optional[float]] = mapped_column(Numeric(5, 4))
     context_recall: Mapped[Optional[float]] = mapped_column(Numeric(5, 4))
+    context_precision: Mapped[Optional[float]] = mapped_column(Numeric(5, 4), default=None)
+    answer_correctness: Mapped[Optional[float]] = mapped_column(Numeric(5, 4), default=None)
     fecha: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

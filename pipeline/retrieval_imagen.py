@@ -107,6 +107,7 @@ def buscar_imagenes_hibrido(
     Filtros soportados (en `filtros`):
         tipo_imagen   (str)  — portada, ilustracion, mapa, fotografia, otro
         recurso_tipo  (str)  — tipo del recurso padre (libro, articulo, ...)
+        idioma        (str)  — idioma del recurso padre
         fecha_desde   (str)  — fecha_publicacion >= (YYYY-MM-DD)
         fecha_hasta   (str)  — fecha_publicacion <= (YYYY-MM-DD)
         recurso_id    (int)  — limitar a imágenes de un recurso específico
@@ -127,6 +128,10 @@ def buscar_imagenes_hibrido(
     if filtros.get("recurso_tipo"):
         condiciones.append("r.tipo = :recurso_tipo")
         params["recurso_tipo"] = filtros["recurso_tipo"]
+
+    if filtros.get("idioma"):
+        condiciones.append("r.idioma = :idioma")
+        params["idioma"] = filtros["idioma"]
 
     if filtros.get("fecha_desde"):
         condiciones.append("r.fecha_publicacion >= :fecha_desde")
@@ -152,6 +157,7 @@ def buscar_imagenes_hibrido(
             ir.descripcion     AS descripcion_imagen,
             r.titulo           AS titulo_recurso,
             r.tipo             AS tipo_recurso,
+            r.idioma,
             r.fecha_publicacion,
             1 - (ei.vector_embedding <=> '{vec_str}'::vector) AS score
         FROM embeddings_imagen ei
